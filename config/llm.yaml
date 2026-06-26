@@ -1,0 +1,28 @@
+llm:
+  backend: llama
+  # Ternary-Bonsai Q2_0 — build Prism-backed llama-cpp-python first:
+  #   PRISM_LLAMA_ROOT=../PrismML-Eng/Jun12-2026 ./scripts/build_llama_prism.sh
+  model_path: models/llm/gemma-4-E2B-it-Q4_K_M.gguf
+  # backend: llama_server  # slower HTTP path; see commented block below
+  # server_bin: ../PrismML-Eng/Jun12-2026/build/bin/llama-server
+  # host: 127.0.0.1
+  # port: 8081
+  # manage_process: true
+  # model_path: models/llm/Bonsai-8B-Q1_0.gguf  # standard pip llama-cpp-python
+  # llama.cpp: -c 8192 -ctk q4_0 -ctv q4_0 -fa on
+  n_ctx: 8192
+  n_gpu_layers: -1
+  n_batch: 16        # lower batch helps on Jetson when STT also uses CUDA
+  n_threads: 1       # CPU threads for prompt processing (0 = llama.cpp default)
+  type_k: q4_0
+  type_v: q4_0
+  flash_attn: true
+  temperature: 1.0
+  max_tokens: 200
+  warmup: true              # streamed completion at load so the first real reply is faster
+  warmup_stream: true
+  warmup_max_tokens: 8
+  warmup_prompt: Hi
+  # STT keeps running during THINKING/SPEAKING for latency (shared GPU). If
+  # llama_decode returns -1, lower n_ctx (e.g. 4096) rather than pausing STT.
+  # system_prompt: set from config/language.yaml active profile

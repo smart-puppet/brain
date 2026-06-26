@@ -1,0 +1,25 @@
+puppet:
+  barge_in_enabled: true
+  phrase_delimiters: ".?!\n"   # sentence ends only — comma splits sound choppy in French
+  min_phrase_chars: 8
+  min_first_phrase_chars: 8
+  first_phrase_max_wait_ms: 0  # start TTS after this if no sentence end yet (0 = wait forever)
+  min_user_chars: 3
+  # How long STT must be quiet before the LLM starts (after VAD says you stopped).
+  stt_gap_ms: 200
+  # Keep feeding STT after VAD end so trailing words are not cut off (nemotron).
+  stt_tail_ms: 400
+  restart_on_partial: true
+  # Barge-in cancels playback. Sustained AEC-clean energy during TTS (not VAD — bleed triggers VAD).
+  barge_in_clean_ms: 400
+  barge_in_clean_rms: 0.015
+  barge_in_cooldown_ms: 2500
+  # Ignore barge-in only at the start of a reply (not each TTS phrase).
+  barge_in_grace_ms: 600
+  # After TTS ends, ignore STT drafts for this long (blocks bleed loops).
+  echo_quiet_ms: 2000
+  # Shorter bleed guard once playback has stopped (post-reply listen unlock).
+  post_reply_echo_ms: 1200
+  # Fuzzy match thresholds for classifying bleed as TTS echo while listening (0–1).
+  tts_echo_word_overlap: 0.45
+  tts_echo_trigram_overlap: 0.35

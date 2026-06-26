@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "puppet"
+version = "0.1.0"
+description = "Voice chatbot orchestrator: STT (parakeet.cpp), LLM (llama.cpp), TTS (Piper)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "numpy>=1.26",
+    "pyyaml>=6.0",
+    "piper-tts>=1.2.0",
+    "pyaudio>=0.2.14",
+    "onnxruntime>=1.16.0",
+]
+
+[project.optional-dependencies]
+llm = ["llama-cpp-python>=0.3.0"]
+native = [
+    "pybind11>=2.12",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pybind11>=2.12",
+]
+all = ["puppet[llm,dev]"]
+
+[project.scripts]
+puppet = "puppet.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+markers = [
+    "component: manual component smoke tests (scripts help / hardware)",
+]

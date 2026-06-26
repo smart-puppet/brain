@@ -1,0 +1,18 @@
+stt:
+  backend: parakeet
+  model_path: models/stt/nemotron-3.5-asr-streaming-0.6b-q8_0.gguf
+  # Nemotron cache-aware streaming (nvidia/nemotron-3.5-asr-streaming-0.6b):
+  # chunk_ms sets att_context right context → STT decode step latency (80–1120 ms).
+  # Affects how often partials refresh DURING speech and benchmark WER; it does NOT
+  # control mic capture (see audio.chunk_ms) or turn trigger (see puppet stt_gap_ms).
+  streaming:
+    chunk_ms: 1120      # 80 | 160 | 320 | 560 | 1120
+    strip_lang_tags: true
+  # language: set from config/language.yaml active profile (stt_language)
+  # ggml CPU threads for encoder/decoder graphs (0 = parakeet default, usually 8).
+  n_threads: 1
+  # Encoder graph batch size for offline/bench paths; streaming inference ignores this.
+  n_batch: 1
+  suspend_during_llm: false   # unload parakeet GPU weights while llama-server decodes
+  warmup: true                # feed silence at load so the first utterance is faster
+  warmup_ms: 1500             # Nemotron needs ~1.2 s continuous audio before first partial

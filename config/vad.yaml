@@ -1,0 +1,11 @@
+vad:
+  enabled: true
+  backend: silero
+  model_path: models/vad/silero_vad.onnx
+  threshold: 0.3
+  # Silence before "speech ended". Raise if the LLM fires mid-sentence (e.g. "Je voudrais…").
+  min_silence_duration_ms: 350
+  speech_pad_ms: 30
+  force_cpu: true
+  gate_stt: true      # when thinking, only feed STT on VAD; never during speaking
+  barge_in: false     # VAD must not trigger barge-in — use AEC-clean energy cancel instead

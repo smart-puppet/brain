@@ -1,0 +1,13 @@
+# Acoustic echo cancellation (SpeexDSP). System package: sudo apt install libspeexdsp-dev
+aec:
+  enabled: true
+  reference_sample_rate: 16000   # match STT mic rate; TTS is resampled on write
+  max_seconds: 3.0
+  frame_size: 160                # 10 ms frames at 16 kHz (must divide audio.chunk_ms)
+  filter_length: 2048            # echo tail (~128 ms at 16 kHz); try 1024–4096
+  delay_ms: 0                    # extra acoustic delay (Speex adapts; tune if needed)
+  playback_delay_ms: 120         # ALSA/output buffer lag (try 80–200)
+  suppress_stt_on_echo: true     # drop mic chunks that still look like TTS bleed
+  echo_ratio_threshold: 0.55     # allow STT when clean/mic energy ratio exceeds this
+  min_reference_rms: 0.006
+  min_mic_rms: 0.008

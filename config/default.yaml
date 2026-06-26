@@ -1,0 +1,27 @@
+audio:
+  sample_rate: 16000   # fixed: PyAudio opens 16 kHz paInt16 mono (STT requirement)
+  channels: 1
+  input_device: null   # null = system default; list devices: python scripts/check_mic.py --list-devices
+  output_device: null
+  chunk_ms: 20
+  output_frames_per_buffer: 4096  # ALSA device buffer; larger reduces underruns
+  output_write_chunk_frames: 1024 # write to ALSA in smaller blocks (avoid startup underrun)
+  playback_warmup_ms: 500       # silence at startup so the first TTS phrase is not clipped
+
+logging:
+  # Single knob for Puppet. INFO = normal (latency bar, User/Assistant). DEBUG = + stt/llm/tts trace.
+  #
+  #   ERROR   — failures only
+  #   WARNING — warmup failed, fresh-speech timeout, recoverable issues
+  #   INFO    — startup, model load, User/Assistant, latency bar per turn, barge-in (recommended)
+  #   DEBUG   — above + puppet.trace step-by-step pipeline; STT/LLM internals; Piper phonemes
+  #
+  # Optional loggers: only to silence a noisy library while keeping level: DEBUG, e.g.
+  #   loggers: { piper.voice: WARNING }
+  level: DEBUG
+
+mqtt:
+  enabled: false
+  broker: localhost
+  port: 1883
+  topic_prefix: puppet

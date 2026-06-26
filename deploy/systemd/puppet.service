@@ -1,0 +1,15 @@
+[Unit]
+Description=Puppet voice chatbot
+After=network.target sound.target
+
+[Service]
+Type=simple
+User=puppet
+WorkingDirectory=/opt/puppet
+Environment=PUPPET_CONFIG=/opt/puppet/config
+ExecStart=/opt/puppet/.venv/bin/python -m puppet.main --config /opt/puppet/config
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

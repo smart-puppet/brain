@@ -1,0 +1,12 @@
+tts:
+  backend: piper
+  device: cpu
+  n_threads: 3       # ONNX Runtime intra/inter op threads (0 = ORT default)
+  speaker_id: null
+  warmup: true
+  warmup_text: "."
+  # Silence prepended before each phrase so short words (e.g. "Hallo") are not clipped.
+  lead_in_ms: 80
+  short_phrase_max_words: 2
+  short_phrase_lead_in_ms: 140
+  # model_path / config_path: set from config/language.yaml active profile
