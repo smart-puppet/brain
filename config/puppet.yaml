@@ -1,0 +1,45 @@
+# Conversation flow + jaw servo. Mic/barge-in defaults: config/profiles/<profile>.yaml
+
+puppet:
+  # --- Turn timing ---
+  min_user_chars: 3
+  stt_gap_ms: 200        # quiet STT after VAD end before LLM
+  stt_tail_ms: 400       # keep feeding STT after VAD end
+  restart_on_partial: true
+
+  # --- LLM → TTS phrasing ---
+  phrase_delimiters: ".?!\n"
+  min_phrase_chars: 8
+  min_first_phrase_chars: 8
+  first_phrase_max_wait_ms: 0
+
+  # --- Echo / bleed guard (post-reply) ---
+  echo_quiet_ms: 2000
+  post_reply_echo_ms: 1200
+  tts_echo_word_overlap: 0.45
+  tts_echo_trigram_overlap: 0.35
+
+  # --- Barge-in (regular-mic profile enables this) ---
+  barge_in_clean_ms: 400
+  barge_in_clean_rms: 0.015
+  barge_in_cooldown_ms: 2500
+  barge_in_grace_ms: 600
+
+  # --- Jaw servo (PCA9685 + MF90) ---
+  mouth:
+    enabled: true
+    i2c_bus: 7
+    i2c_address: 0x40
+    channel: 15
+    pwm_hz: 50.0
+    closed_deg: 20.0
+    open_deg: 0.0
+    mode: word              # word | fallback (auto when no phoneme_duration ONNX)
+    playback_delay_ms: 300  # lip-sync knob; null = auto from ALSA buffer
+    start_delay_ms: 0
+    min_open_ms: 50
+    word_min_gap_ms: 60
+    min_close_ms: 50
+    servo_move_ms: 50
+    fallback_flip_ms: 200
+    debug: false

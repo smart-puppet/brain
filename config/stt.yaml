@@ -1,0 +1,13 @@
+# Speech-to-text (Nemotron via parakeet.cpp). Language from language.yaml profile.
+
+stt:
+  backend: parakeet
+  model_path: models/stt/nemotron-3.5-asr-streaming-0.6b-q8_0.gguf
+  streaming:
+    chunk_ms: 1120      # 80–1120: partial refresh latency during speech
+    strip_lang_tags: true
+  n_threads: 1
+  n_batch: 1
+  suspend_during_llm: false
+  warmup: true
+  warmup_ms: 1500

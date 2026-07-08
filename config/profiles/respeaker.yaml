@@ -1,0 +1,20 @@
+# ReSpeaker XVF3800 — hardware AEC/VAD, continuous STT, smart interrupt.
+# See config/README.md
+
+audio:
+  respeaker:
+    usb_reset_on_start: always   # auto | always | never
+    reset_method: all            # firmware | usb_port | usb_cycle | both | all
+    settle_ms: 3000
+    pause_tts_on_speech: true    # pause reply immediately when speech detected
+    interrupt_timeout_ms: 900      # resume if no STT text in this window (noise)
+    doa_debug: true              # true + logging.level DEBUG → direction logs
+    doa_poll_ms: 250
+
+vad:
+  enabled: true       # Silero: turn boundaries (not STT gating)
+  gate_stt: false     # keep Nemotron decoding continuously
+
+puppet:
+  barge_in_enabled: false
+  interrupt_min_chars: 2

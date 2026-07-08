@@ -1,0 +1,4 @@
+# Pinned llama-cpp-python source (cloned to vendor/llama-cpp-python by build_llama*.sh)
+# Track latest stable release; Gemma 4 (gemma4 arch) needs v0.3.30+.
+LLAMA_CPP_PYTHON_REPO=https://github.com/abetlen/llama-cpp-python
+LLAMA_CPP_PYTHON_REF=v0.3.33

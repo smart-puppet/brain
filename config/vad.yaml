@@ -1,0 +1,10 @@
+# Silero VAD — turn boundaries (speech start/end). Mic gating: see profile + gate_stt.
+# Tune silence timing here; enable/gate_stt defaults come from config/profiles/*.yaml
+
+vad:
+  backend: silero
+  model_path: models/vad/silero_vad.onnx
+  threshold: 0.5
+  min_silence_duration_ms: 350   # raise if LLM fires mid-sentence
+  speech_pad_ms: 30
+  force_cpu: true

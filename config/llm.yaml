@@ -1,0 +1,25 @@
+# LLM (llama-cpp-python). System prompt from language.yaml profile.
+#
+# WARNING: only one llama binding can be installed in .venv at a time.
+# build_llama.sh and build_llama_prism.sh overwrite each other — see docs/deployment.md.
+
+llm:
+  backend: llama
+  # Must match the LAST build script you ran (not a runtime switch between installs):
+  # upstream: ./scripts/build_llama.sh       — ggml-org/llama.cpp (Gemma, Q4, etc.)
+  # prism:    ./scripts/build_llama_prism.sh  — Prism fork for Ternary-Bonsai Q2_0
+  binding: upstream
+  model_path: models/llm/gemma-4-E2B-it-Q4_K_M.gguf
+  n_ctx: 8192
+  n_gpu_layers: -1
+  n_batch: 16
+  n_threads: 1
+  type_k: q4_0
+  type_v: q4_0
+  flash_attn: true
+  temperature: 1.0
+  max_tokens: 200
+  warmup: true
+  warmup_stream: true
+  warmup_max_tokens: 8
+  warmup_prompt: Hi
