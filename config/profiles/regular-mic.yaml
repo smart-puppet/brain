@@ -1,0 +1,14 @@
+# Generic USB mic — software VAD gates STT; enable barge-in + PulseAudio/PipeWire AEC.
+# See config/README.md
+
+audio:
+  respeaker:
+    usb_reset_on_start: never
+
+vad:
+  enabled: true
+  gate_stt: true      # feed STT only during speech (saves CPU)
+
+puppet:
+  barge_in_enabled: true
+  interrupt_min_chars: 2

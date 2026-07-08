@@ -1,0 +1,14 @@
+# Text-to-speech (Piper). Voice model from language.yaml profile.
+
+tts:
+  backend: piper
+  device: cpu
+  n_threads: 3
+  # Speech rate: 1.0 = normal, >1 faster, <1 slower (maps to Piper length_scale).
+  speed: 1.0
+  speaker_id: null
+  warmup: true
+  warmup_text: "."
+  lead_in_ms: 80
+  short_phrase_max_words: 2
+  short_phrase_lead_in_ms: 140

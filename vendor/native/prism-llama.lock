@@ -1,0 +1,4 @@
+# Pinned PrismML llama.cpp fork (Q2_0 / Ternary-Bonsai support)
+PRISM_LLAMA_REPO=https://github.com/PrismML-Eng/llama.cpp
+PRISM_LLAMA_COMMIT=c85e97a44d7f50131e65a5cbb5bb4a669cd136c0
+PRISM_LLAMA_COMMIT_DATE=2026-06-12

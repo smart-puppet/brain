@@ -1,0 +1,26 @@
+# Puppet base config — see config/README.md for the full guide.
+profile: respeaker   # respeaker | regular-mic
+
+audio:
+  sample_rate: 16000   # fixed for STT (16 kHz int16 mono)
+  channels: 1
+  input_device: null   # null = default; list: python scripts/check_mic.py --list-devices
+  output_device: null
+  chunk_ms: 20
+  output_frames_per_buffer: 4096
+  output_write_chunk_frames: 1024
+  playback_warmup_ms: 500
+  speech_rms_threshold: 0.015   # used when vad.enabled: false
+  respeaker:
+    vendor_id: 0x2886
+    product_ids: [0x001a]
+    name_patterns: [respeaker, xvf3800, seeed]
+
+logging:
+  level: DEBUG   # INFO = normal; DEBUG = + stt/llm/tts trace; mouth: puppet.mouth.debug or --mouth-debug
+
+mqtt:
+  enabled: false
+  broker: localhost
+  port: 1883
+  topic_prefix: puppet
