@@ -1,6 +1,8 @@
-# Puppet
+# brain
 
-Voice chatbot for embedded Linux (Jetson). Single-process orchestrator with modular STT, LLM, and TTS backends.
+Voice / conversation module for Puppet (Jetson).
+
+Single-process orchestrator with modular STT, LLM, and TTS backends. The Python package is `puppet` (`puppet` CLI). Stack overview: [architecture](https://github.com/smart-puppet/docs/blob/main/architecture.md).
 
 | Component | Backend | Binding |
 |-----------|---------|---------|
@@ -27,6 +29,7 @@ pip install -e ".[dev]"
 
 # Run
 puppet --config config/
+# or: ./scripts/run_puppet.sh --language fr
 # French or German:
 puppet --language fr
 puppet --language de

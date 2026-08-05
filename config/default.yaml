@@ -21,6 +21,10 @@ logging:
 
 mqtt:
   enabled: false
-  broker: localhost
+  # Inject eyes traversability hints into Gemma's system prompt (see ../../docs/mqtt.md).
+  vision_enabled: true
+  broker: 127.0.0.1
   port: 1883
   topic_prefix: puppet
+  scene_topic: robot/nav/scene
+  vision_min_interval_s: 1.0

@@ -101,6 +101,7 @@ class LlamaLlm(LlmBackend):
     self._n_ctx = n_ctx
     self._cancelled = False
     self._last_perf: LlamaPerfStats | None = None
+    self._vision_hint_fn = None
     llama_kwargs: dict[str, Any] = dict(
       n_ctx=n_ctx,
       n_gpu_layers=n_gpu_layers,
@@ -164,10 +165,29 @@ class LlamaLlm(LlmBackend):
   def last_perf(self) -> LlamaPerfStats | None:
     return self._last_perf
 
+  def set_vision_hint_fn(self, fn) -> None:
+    """Optional callable returning a short vision context line for the system prompt."""
+    self._vision_hint_fn = fn
+
+  def _system_with_vision(self) -> str:
+    base = self._system_prompt
+    if not self._vision_hint_fn:
+      return base
+    try:
+      line = (self._vision_hint_fn() or "").strip()
+    except Exception:
+      return base
+    if not line:
+      return base
+    if base:
+      return f"{base}\n\n{line}"
+    return line
+
   def _build_messages(self, conversation: Conversation) -> list[dict[str, str]]:
     messages: list[dict[str, str]] = []
-    if self._system_prompt:
-      messages.append({"role": "system", "content": self._system_prompt})
+    system = self._system_with_vision()
+    if system:
+      messages.append({"role": "system", "content": system})
     for msg in conversation.prompt_messages():
       messages.append({"role": msg.role, "content": msg.content})
     return messages

@@ -69,6 +69,24 @@ class Orchestrator:
     self.stt = stt or create_stt(config)
     self._vad = vad or create_vad(config)
 
+    self._scene_ingest = None
+    mqtt_cfg = config.get("mqtt", {}) or {}
+    if bool(mqtt_cfg.get("vision_enabled", False)):
+      try:
+        from puppet.mqtt.scene import SceneIngest
+
+        self._scene_ingest = SceneIngest(
+          broker=str(mqtt_cfg.get("broker", "127.0.0.1")),
+          port=int(mqtt_cfg.get("port", 1883)),
+          topic=str(mqtt_cfg.get("scene_topic", "robot/nav/scene")),
+          min_interval_s=float(mqtt_cfg.get("vision_min_interval_s", 1.0)),
+        )
+        self._scene_ingest.start()
+        if hasattr(self.llm, "set_vision_hint_fn"):
+          self.llm.set_vision_hint_fn(self._scene_ingest.context_line)
+      except Exception as exc:  # noqa: BLE001
+        logger.warning("Vision MQTT ingest disabled: %s", exc)
+
     self._stt_rate = int(audio_cfg.get("sample_rate", 16000))
     # ReSpeaker-first default: keep continuous decode and avoid false interruptions.
     self._barge_in = bool(puppet_cfg.get("barge_in_enabled", False))
