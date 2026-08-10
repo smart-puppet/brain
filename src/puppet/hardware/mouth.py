@@ -130,6 +130,12 @@ class PhonemeMouth:
     self._timeline_late_catchup_samples = max(1, int(self._sample_rate * 0.12))
     self._timeline_pump_s = 0.010
 
+  def _set_outputs_enabled(self, enabled: bool) -> None:
+    """Wake PCA PWM while talking; sleep (outputs inactive) when idle."""
+    setter = getattr(self._pca, "set_enabled", None)
+    if callable(setter):
+      setter(enabled)
+
   def _playback_samples(self, playback: PlaybackSync | None) -> int:
     if playback is None:
       return 0
@@ -306,13 +312,18 @@ class PhonemeMouth:
     """Closed-jaw idle pose while Puppet is listening for speech."""
     self._is_open = False
     with self._lock:
+      # Drive closed while PWM is awake, then sleep so the servo goes quiet.
+      self._set_outputs_enabled(True)
       self._pca.set_servo_angle(self._channel, self._closed_deg)
+      self._set_outputs_enabled(False)
 
   def open_at_start(self) -> None:
     """Open-jaw pose when the system boots."""
     self._is_open = True
     with self._lock:
+      self._set_outputs_enabled(True)
       self._pca.set_servo_angle(self._channel, self._open_deg)
+      self._set_outputs_enabled(False)
 
   def reset(self) -> None:
     self.clear_sync()
@@ -320,6 +331,7 @@ class PhonemeMouth:
 
   def on_reply_sync_start(self) -> None:
     self._reply_sample_offset = self._start_delay_samples
+    self._set_outputs_enabled(True)
     self._debug.reply_sync_start()
 
   def close(self) -> None:
@@ -334,7 +346,9 @@ class PhonemeMouth:
       self._timeline_cond.notify_all()
     self._is_open = False
     with self._lock:
+      self._set_outputs_enabled(True)
       self._pca.set_servo_angle(self._channel, self._closed_deg)
+      self._set_outputs_enabled(False)
     bus = self._bus
     if bus is not None and hasattr(bus, "close"):
       bus.close()
@@ -383,7 +397,7 @@ def create_mouth(config: dict[str, Any], *, sample_rate: int = 22050) -> MouthCo
     debug=debug,
   )
   logger.info(
-    "Mouth servo on I2C bus %d ch %d (binary %.0f° / %.0f°, mode=%s%s)",
+    "Mouth servo on I2C bus %d ch %d (binary %.0f° / %.0f°, mode=%s, sleep-idle%s)",
     bus_no,
     channel,
     mouth._closed_deg,

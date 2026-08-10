@@ -32,11 +32,12 @@ puppet:
     i2c_address: 0x40
     channel: 15
     pwm_hz: 50.0
+    # Tie PCA /OE to GND. Idle = MODE1 SLEEP over I2C; wake while talking.
     closed_deg: 125.0
-    open_deg: 145.0
+    open_deg: 140.0
     mode: word              # word | fallback (auto when no phoneme_duration ONNX)
     granularity: word       # word | phoneme — jaw sync resolution
-    playback_delay_ms: 300  # lip-sync knob; null = auto from ALSA buffer
+    playback_delay_ms: 400  # lip-sync knob; null = auto from ALSA buffer
     start_delay_ms: 0
     min_open_ms: 50
     word_min_gap_ms: 0     # 0 = one open/close per word; >0 merges words closer than this

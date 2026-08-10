@@ -21,9 +21,50 @@ class PCA9685:
   def __init__(self, bus: object, address: int = 0x40) -> None:
     self._bus = bus
     self._address = address
+    self._enabled: bool | None = None
 
   def read_byte(self, register: int) -> int:
     return self._bus.read_byte_data(self._address, register)
+
+  def is_sleeping(self) -> bool:
+    return bool(self.read_byte(_MODE1) & _MODE1_SLEEP)
+
+  def sleep(self) -> None:
+    """Stop the oscillator — PWM outputs go inactive (servo limp / quiet)."""
+    if self._enabled is False:
+      return
+    mode = self.read_byte(_MODE1)
+    # Clear RESTART when entering sleep (datasheet).
+    self._bus.write_byte_data(
+      self._address,
+      _MODE1,
+      (mode & ~_MODE1_RESTART) | _MODE1_SLEEP,
+    )
+    self._enabled = False
+
+  def wake(self) -> None:
+    """Start the oscillator and restart PWM from the programmed duty cycles."""
+    if self._enabled is True:
+      return
+    mode = self.read_byte(_MODE1)
+    awake = mode & ~_MODE1_SLEEP
+    self._bus.write_byte_data(self._address, _MODE1, awake)
+    # Oscillator needs >= 500 µs after leaving sleep before RESTART.
+    time.sleep(0.001)
+    self._bus.write_byte_data(
+      self._address,
+      _MODE1,
+      awake | _MODE1_RESTART | _MODE1_AI,
+    )
+    time.sleep(0.001)
+    self._enabled = True
+
+  def set_enabled(self, enabled: bool) -> None:
+    """Wake (PWM on) while talking; sleep (PWM off) when idle."""
+    if enabled:
+      self.wake()
+    else:
+      self.sleep()
 
   def set_pwm_frequency(self, hz: float) -> None:
     if not 24 <= hz <= 1526:
@@ -43,6 +84,7 @@ class PCA9685:
       awake | _MODE1_RESTART | _MODE1_AI,
     )
     time.sleep(0.005)
+    self._enabled = True
 
   def read_pwm_off(self, channel: int) -> int:
     base = _LED0_ON_L + 4 * channel

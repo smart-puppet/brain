@@ -50,6 +50,7 @@ Profile files: `config/profiles/respeaker.yaml`, `config/profiles/regular-mic.ya
 
 - `playback_delay_ms` — main knob (try 250–350 ms)
 - `mode: word` — open/close per word
+- Idle jaw uses PCA9685 `MODE1` SLEEP over I2C (tie `/OE` to GND); wakes while talking
 - `debug: true` or `puppet --mouth-debug` — timeline logs
 
 ### Turn detection (when LLM starts)

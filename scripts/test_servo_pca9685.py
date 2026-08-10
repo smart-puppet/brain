@@ -37,7 +37,8 @@ def scan_bus(bus: SMBus) -> list[int]:
 def probe_pca9685(pca: PCA9685) -> None:
   mode1 = pca.read_byte(_MODE1)
   mode2 = pca.read_byte(_MODE2)
-  print(f"PCA9685 MODE1=0x{mode1:02x}  MODE2=0x{mode2:02x}")
+  sleeping = "SLEEP" if mode1 & _MODE1_SLEEP else "AWAKE"
+  print(f"PCA9685 MODE1=0x{mode1:02x}  MODE2=0x{mode2:02x}  ({sleeping})")
 
 
 def _sweep_angles(min_deg: float, max_deg: float, step_deg: float) -> list[float]:
@@ -79,9 +80,63 @@ def run_sweep(
       time.sleep(pause_s)
 
 
+def run_sleep_test(
+  pca: PCA9685,
+  channel: int,
+  *,
+  open_deg: float,
+  closed_deg: float,
+  cycles: int,
+  pause_s: float,
+) -> int:
+  """Toggle PCA MODE1 SLEEP while moving the jaw — no GPIO."""
+  if cycles < 1:
+    print("--sleep-test-cycles must be >= 1", file=sys.stderr)
+    return 1
+  print(
+    f"PCA sleep test: wake→{open_deg:.0f}° / sleep idle / wake→{closed_deg:.0f}° "
+    f"({cycles} cycle(s), {pause_s:.1f}s holds)"
+  )
+  print("Tie /OE to GND. Servo should move only while AWAKE.")
+  try:
+    for cycle in range(1, cycles + 1):
+      print(f"Cycle {cycle}/{cycles}")
+      pca.set_enabled(True)
+      probe_pca9685(pca)
+      pca.set_servo_angle(channel, open_deg)
+      print(f"  AWAKE  → {open_deg:.0f}° — hold {pause_s:.1f}s")
+      time.sleep(pause_s)
+
+      pca.set_enabled(False)
+      probe_pca9685(pca)
+      print(f"  SLEEP  (outputs off) — hold {pause_s:.1f}s")
+      time.sleep(pause_s)
+
+      pca.set_enabled(True)
+      probe_pca9685(pca)
+      pca.set_servo_angle(channel, closed_deg)
+      print(f"  AWAKE  → {closed_deg:.0f}° — hold {pause_s:.1f}s")
+      time.sleep(pause_s)
+
+      pca.set_enabled(False)
+      probe_pca9685(pca)
+      print(f"  SLEEP  (outputs off) — hold {pause_s:.1f}s")
+      time.sleep(pause_s)
+    print("Sleep test done.")
+    return 0
+  except KeyboardInterrupt:
+    print("\nStopped.")
+    return 0
+  finally:
+    try:
+      pca.set_enabled(False)
+    except Exception:
+      pass
+
+
 def main(argv: list[str] | None = None) -> int:
   parser = argparse.ArgumentParser(
-    description="Test PCA9685 + MF90 servo on Jetson I2C (default: bus 1, channel 15)",
+    description="Test PCA9685 + MF90 servo on Jetson I2C (default: bus 7, channel 15)",
   )
   parser.add_argument(
     "--bus",
@@ -160,7 +215,30 @@ def main(argv: list[str] | None = None) -> int:
     "--pause",
     type=float,
     default=1.0,
-    help="Pause between positions during --sweep (default 1)",
+    help="Pause between positions during --sweep / --sleep-test (default 1)",
+  )
+  parser.add_argument(
+    "--sleep-test",
+    action="store_true",
+    help="Toggle MODE1 SLEEP over I2C (wake/move/sleep); no GPIO",
+  )
+  parser.add_argument(
+    "--sleep-test-cycles",
+    type=int,
+    default=3,
+    help="Cycles for --sleep-test (default 3)",
+  )
+  parser.add_argument(
+    "--open-deg",
+    type=float,
+    default=145.0,
+    help="Open angle for --sleep-test (default 145)",
+  )
+  parser.add_argument(
+    "--closed-deg",
+    type=float,
+    default=125.0,
+    help="Closed angle for --sleep-test (default 125)",
   )
   args = parser.parse_args(argv)
 
@@ -193,13 +271,20 @@ def main(argv: list[str] | None = None) -> int:
 
       pca.set_pwm_frequency(args.frequency)
       probe_pca9685(pca)
-      mode1 = pca.read_byte(_MODE1)
-      if mode1 & _MODE1_SLEEP:
-        print(
-          f"Warning: PCA9685 still in SLEEP (MODE1=0x{mode1:02x}) — PWM outputs disabled.",
-          file=sys.stderr,
-        )
       print(f"PWM frequency set to {args.frequency:.0f} Hz")
+      print("Note: tie PCA /OE to GND so outputs can drive when awake.")
+
+      if args.sleep_test:
+        return run_sleep_test(
+          pca,
+          args.channel,
+          open_deg=args.open_deg,
+          closed_deg=args.closed_deg,
+          cycles=args.sleep_test_cycles,
+          pause_s=args.pause,
+        )
+
+      pca.set_enabled(True)
 
       if args.sweep:
         if args.sweep_cycles < 1:
@@ -219,6 +304,7 @@ def main(argv: list[str] | None = None) -> int:
           cycles=args.sweep_cycles,
         )
         print("Sweep done.")
+        pca.set_enabled(False)
         return 0
 
       if args.pulse_us is not None:
@@ -239,6 +325,7 @@ def main(argv: list[str] | None = None) -> int:
       if args.pulse_us is not None or args.angle is not None or args.hold > 0:
         print(f"Holding for {args.hold:.1f}s (Ctrl+C to stop early)")
         time.sleep(args.hold)
+      pca.set_enabled(False)
       return 0
 
   except FileNotFoundError:
