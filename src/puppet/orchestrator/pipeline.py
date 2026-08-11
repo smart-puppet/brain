@@ -87,30 +87,18 @@ class Orchestrator:
         self._scene_ingest.start()
         if hasattr(self.llm, "set_vision_hint_fn"):
           self.llm.set_vision_hint_fn(self._scene_ingest.context_line)
-        if bool(mqtt_cfg.get("capture_before_reply", True)) and hasattr(
-          self.llm, "set_vision_refresh_fn"
-        ):
-          def _refresh_vision() -> None:
-            result = self._scene_ingest.request_capture()
-            if not result.get("ok"):
-              logger.warning("Vision capture failed: %s", result.get("error"))
-              return
-            line = self._scene_ingest.context_line()
-            nobj = len(result.get("objects") or [])
-            logger.info(
-              "Vision capture ok objects=%s hint=%r → %s",
-              nobj,
-              result.get("hint"),
-              line or "(empty)",
-            )
-
-          self.llm.set_vision_refresh_fn(_refresh_vision)
+        # Captures are gated on the user prompt (needs_vision_capture), not every reply.
+        # capture_before_reply=true is kept as a legacy "always capture" override.
+        self._capture_every_reply = bool(mqtt_cfg.get("capture_before_reply", False))
       except Exception as exc:  # noqa: BLE001
         logger.warning("Vision MQTT ingest disabled: %s", exc)
 
-    from puppet.mqtt.scene import looks_like_vision_dump
+    from puppet.mqtt.scene import looks_like_vision_dump, needs_vision_capture
 
     self._looks_like_vision_dump = looks_like_vision_dump
+    self._needs_vision_capture = needs_vision_capture
+    if not hasattr(self, "_capture_every_reply"):
+      self._capture_every_reply = False
 
     self._stt_rate = int(audio_cfg.get("sample_rate", 16000))
     # ReSpeaker-first default: keep continuous decode and avoid false interruptions.
@@ -758,9 +746,26 @@ class Orchestrator:
     self._speaking_since = 0.0
     self._playback_started_at = 0.0
 
-    # "What do you see?" → capture + speak object glimpse (small LLMs ignore CameraJSON).
-    if self._try_vision_glimpse_reply(prompt):
-      return
+    # Only ask eyes for a fresh scene when the user utterance is about seeing the room.
+    want_vision = self._scene_ingest is not None and (
+      self._capture_every_reply or self._needs_vision_capture(prompt)
+    )
+    if self._scene_ingest is not None:
+      self._scene_ingest.set_inject_context(False)
+
+    if want_vision:
+      if self._try_vision_glimpse_reply(prompt):
+        return
+      result = self._scene_ingest.request_capture()
+      if result.get("ok"):
+        self._scene_ingest.set_inject_context(True)
+        logger.info(
+          "Vision capture for prompt objects=%s hint=%r",
+          len(result.get("objects") or []),
+          result.get("hint"),
+        )
+      else:
+        logger.warning("Vision capture failed: %s", result.get("error"))
 
     epoch = self._worker.start(
       self.conversation,
@@ -770,25 +775,20 @@ class Orchestrator:
     self.bus.emit("generation_started", draft=self.conversation.draft_user, epoch=epoch)
 
   @staticmethod
-  def _is_vision_question(text: str) -> bool:
+  def _is_simple_see_question(text: str) -> bool:
+    """Open 'what do you see?' style — answered with spoken_glimpse, no LLM."""
     t = (text or "").lower()
     keys = (
       "what do you see",
       "what can you see",
-      "do you see",
-      "look",
       "qu'est-ce que tu vois",
       "quest-ce que tu vois",
       "qu est ce que tu vois",
-      "tu vois",
       "que vois",
       "vois-tu",
       "vois tu",
-      "regarde",
-      "devant toi",
       "was siehst",
       "was kannst du sehen",
-      "siehst du",
     )
     return any(k in t for k in keys)
 
@@ -809,12 +809,13 @@ class Orchestrator:
     self.bus.emit("generation_done", epoch=self._worker.epoch)
 
   def _try_vision_glimpse_reply(self, prompt: str) -> bool:
-    if self._scene_ingest is None or not self._is_vision_question(prompt):
+    if self._scene_ingest is None or not self._is_simple_see_question(prompt):
       return False
     result = self._scene_ingest.request_capture()
     if not result.get("ok"):
       logger.warning("Vision glimpse capture failed: %s", result.get("error"))
       return False
+    self._scene_ingest.set_inject_context(False)
     glimpse = self._scene_ingest.spoken_glimpse(self._vision_lang)
     nobj = len(result.get("objects") or [])
     logger.info("Vision question → glimpse objects=%s: %s", nobj, glimpse)
@@ -880,15 +881,16 @@ class Orchestrator:
     spoken = (reply or "").strip()
     replaced = False
     need_glimpse = False
-    if self._scene_ingest is not None:
+    if self._scene_ingest is not None and self._scene_ingest.inject_context:
       if (
         self._worker.suppressed_phrases > 0
         or self._block_vision_tts
         or self._looks_like_vision_dump(spoken)
       ):
         need_glimpse = True
-      elif self._scene_ingest.has_objects() and not self._scene_ingest.reply_mentions_objects(
-        spoken
+      elif (
+        self._scene_ingest.has_objects()
+        and not self._scene_ingest.reply_mentions_objects(spoken, self._vision_lang)
       ):
         # Model answered but ignored YOLO objects (e.g. only talked about the floor).
         need_glimpse = True
@@ -903,6 +905,9 @@ class Orchestrator:
       replaced = True
       self._tts_pipeline.submit(spoken)
       self._tts_pipeline.wait_done()
+
+    if self._scene_ingest is not None:
+      self._scene_ingest.set_inject_context(False)
 
     user_text = self.conversation.commit_draft()
     self._finish_spoken_turn(

@@ -23,8 +23,9 @@ mqtt:
   enabled: false
   # Inject eyes traversability hints into Gemma's system prompt (see ../../docs/mqtt.md).
   vision_enabled: true
-  # Before each LLM reply, publish robot/nav/capture and wait for a fresh scene.
-  capture_before_reply: true
+  # Legacy override: if true, capture before every reply. Default false — brain only
+  # requests a capture when the user prompt is about seeing the room.
+  capture_before_reply: false
   broker: 127.0.0.1
   port: 1883
   topic_prefix: puppet

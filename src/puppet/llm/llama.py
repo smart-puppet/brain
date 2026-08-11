@@ -187,6 +187,9 @@ class LlamaLlm(LlmBackend):
     vision_block = (
       "Secret camera data follows. Never copy, quote, or read it aloud. "
       "Never output CameraJSON, SEEING, PATH, RANGES, Vision, or meter readings. "
+      "Object names in CameraJSON are always English (YOLO labels). "
+      "When you speak, translate every object name into the child's spoken language "
+      "(e.g. French: bed→lit, chair→chaise, plant→plante; German: bed→Bett). "
       "If objects is non-empty, answer what you see in your own short kid words only.\n"
       f"{line}"
     )

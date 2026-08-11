@@ -46,8 +46,8 @@ Profile files: `config/profiles/respeaker.yaml`, `config/profiles/regular-mic.ya
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `vision_enabled` | `true` | Subscribe to `robot/nav/scene` and inject `Vision:` into Gemma |
-| `capture_before_reply` | `true` | Before each reply, publish `robot/nav/capture` and wait |
+| `vision_enabled` | `true` | Subscribe to `robot/nav/scene` and inject `CameraJSON` when needed |
+| `capture_before_reply` | `false` | If `true`, capture before every reply; if `false`, only when the user asks about seeing the room |
 | `capture_topic` | `robot/nav/capture` | Capture request topic (eyes must be running) |
 | `scene_topic` | `robot/nav/scene` | Scene result topic |
 | `capture_timeout_s` | `60` | Max wait for a matching scene |

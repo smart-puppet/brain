@@ -19,6 +19,170 @@ _VISION_DUMP_RE = re.compile(
   r"\bprivate (?:sensor|camera)\b|m to the left|m to the right|\|\s*PATH|\|\s*RANGES)"
 )
 
+# English YOLO/COCO labels → spoken words per language.
+_LABEL_I18N: dict[str, dict[str, str]] = {
+  "person": {"en": "person", "fr": "personne", "de": "Person"},
+  "bicycle": {"en": "bike", "fr": "velo", "de": "Fahrrad"},
+  "car": {"en": "car", "fr": "voiture", "de": "Auto"},
+  "motorcycle": {"en": "motorcycle", "fr": "moto", "de": "Motorrad"},
+  "airplane": {"en": "plane", "fr": "avion", "de": "Flugzeug"},
+  "bus": {"en": "bus", "fr": "bus", "de": "Bus"},
+  "train": {"en": "train", "fr": "train", "de": "Zug"},
+  "truck": {"en": "truck", "fr": "camion", "de": "LKW"},
+  "boat": {"en": "boat", "fr": "bateau", "de": "Boot"},
+  "traffic light": {"en": "traffic light", "fr": "feu", "de": "Ampel"},
+  "fire hydrant": {"en": "hydrant", "fr": "borne", "de": "Hydrant"},
+  "stop sign": {"en": "stop sign", "fr": "stop", "de": "Stoppschild"},
+  "parking meter": {"en": "parking meter", "fr": "parcometre", "de": "Parkuhr"},
+  "bench": {"en": "bench", "fr": "banc", "de": "Bank"},
+  "bird": {"en": "bird", "fr": "oiseau", "de": "Vogel"},
+  "cat": {"en": "cat", "fr": "chat", "de": "Katze"},
+  "dog": {"en": "dog", "fr": "chien", "de": "Hund"},
+  "horse": {"en": "horse", "fr": "cheval", "de": "Pferd"},
+  "sheep": {"en": "sheep", "fr": "mouton", "de": "Schaf"},
+  "cow": {"en": "cow", "fr": "vache", "de": "Kuh"},
+  "elephant": {"en": "elephant", "fr": "elephant", "de": "Elefant"},
+  "bear": {"en": "bear", "fr": "ours", "de": "Bar"},
+  "zebra": {"en": "zebra", "fr": "zebre", "de": "Zebra"},
+  "giraffe": {"en": "giraffe", "fr": "girafe", "de": "Giraffe"},
+  "backpack": {"en": "backpack", "fr": "sac", "de": "Rucksack"},
+  "umbrella": {"en": "umbrella", "fr": "parapluie", "de": "Schirm"},
+  "handbag": {"en": "bag", "fr": "sac", "de": "Tasche"},
+  "tie": {"en": "tie", "fr": "cravate", "de": "Krawatte"},
+  "suitcase": {"en": "suitcase", "fr": "valise", "de": "Koffer"},
+  "frisbee": {"en": "frisbee", "fr": "frisbee", "de": "Frisbee"},
+  "skis": {"en": "skis", "fr": "skis", "de": "Ski"},
+  "snowboard": {"en": "snowboard", "fr": "snowboard", "de": "Snowboard"},
+  "sports ball": {"en": "ball", "fr": "balle", "de": "Ball"},
+  "kite": {"en": "kite", "fr": "cerf-volant", "de": "Drachen"},
+  "baseball bat": {"en": "bat", "fr": "batte", "de": "Schager"},
+  "baseball glove": {"en": "glove", "fr": "gant", "de": "Handschuh"},
+  "skateboard": {"en": "skateboard", "fr": "skate", "de": "Skateboard"},
+  "surfboard": {"en": "surfboard", "fr": "surf", "de": "Surfbrett"},
+  "tennis racket": {"en": "racket", "fr": "raquette", "de": "Schager"},
+  "bottle": {"en": "bottle", "fr": "bouteille", "de": "Flasche"},
+  "wine glass": {"en": "glass", "fr": "verre", "de": "Glas"},
+  "cup": {"en": "cup", "fr": "tasse", "de": "Tasse"},
+  "fork": {"en": "fork", "fr": "fourchette", "de": "Gabel"},
+  "knife": {"en": "knife", "fr": "couteau", "de": "Messer"},
+  "spoon": {"en": "spoon", "fr": "cuillere", "de": "Loffel"},
+  "bowl": {"en": "bowl", "fr": "bol", "de": "Schussel"},
+  "banana": {"en": "banana", "fr": "banane", "de": "Banane"},
+  "apple": {"en": "apple", "fr": "pomme", "de": "Apfel"},
+  "sandwich": {"en": "sandwich", "fr": "sandwich", "de": "Sandwich"},
+  "orange": {"en": "orange", "fr": "orange", "de": "Orange"},
+  "broccoli": {"en": "broccoli", "fr": "brocoli", "de": "Brokkoli"},
+  "carrot": {"en": "carrot", "fr": "carotte", "de": "Karotte"},
+  "hot dog": {"en": "hot dog", "fr": "hot-dog", "de": "Hotdog"},
+  "pizza": {"en": "pizza", "fr": "pizza", "de": "Pizza"},
+  "donut": {"en": "donut", "fr": "donut", "de": "Donut"},
+  "cake": {"en": "cake", "fr": "gateau", "de": "Kuchen"},
+  "chair": {"en": "chair", "fr": "chaise", "de": "Stuhl"},
+  "couch": {"en": "couch", "fr": "canape", "de": "Sofa"},
+  "potted plant": {"en": "plant", "fr": "plante", "de": "Pflanze"},
+  "bed": {"en": "bed", "fr": "lit", "de": "Bett"},
+  "dining table": {"en": "table", "fr": "table", "de": "Tisch"},
+  "toilet": {"en": "toilet", "fr": "toilettes", "de": "Toilette"},
+  "tv": {"en": "TV", "fr": "tele", "de": "Fernseher"},
+  "laptop": {"en": "laptop", "fr": "ordinateur", "de": "Laptop"},
+  "mouse": {"en": "mouse", "fr": "souris", "de": "Maus"},
+  "remote": {"en": "remote", "fr": "telecommande", "de": "Fernbedienung"},
+  "keyboard": {"en": "keyboard", "fr": "clavier", "de": "Tastatur"},
+  "cell phone": {"en": "phone", "fr": "telephone", "de": "Handy"},
+  "microwave": {"en": "microwave", "fr": "micro-ondes", "de": "Mikrowelle"},
+  "oven": {"en": "oven", "fr": "four", "de": "Ofen"},
+  "toaster": {"en": "toaster", "fr": "grille-pain", "de": "Toaster"},
+  "sink": {"en": "sink", "fr": "evier", "de": "Spule"},
+  "refrigerator": {"en": "fridge", "fr": "frigo", "de": "Kuhlschrank"},
+  "book": {"en": "book", "fr": "livre", "de": "Buch"},
+  "clock": {"en": "clock", "fr": "horloge", "de": "Uhr"},
+  "vase": {"en": "vase", "fr": "vase", "de": "Vase"},
+  "scissors": {"en": "scissors", "fr": "ciseaux", "de": "Schere"},
+  "teddy bear": {"en": "teddy", "fr": "ours en peluche", "de": "Teddy"},
+  "hair drier": {"en": "hair dryer", "fr": "seche-cheveux", "de": "Fohn"},
+  "toothbrush": {"en": "toothbrush", "fr": "brosse a dents", "de": "Zahnbürste"},
+}
+
+# French: masculine nouns → "un"; others → "une" (kid-simple).
+_FR_MASC = frozenset(
+  {
+    "velo",
+    "avion",
+    "bus",
+    "train",
+    "camion",
+    "bateau",
+    "feu",
+    "stop",
+    "banc",
+    "oiseau",
+    "chat",
+    "chien",
+    "cheval",
+    "mouton",
+    "elephant",
+    "ours",
+    "zebre",
+    "sac",
+    "parapluie",
+    "frisbee",
+    "skate",
+    "surf",
+    "verre",
+    "bol",
+    "sandwich",
+    "brocoli",
+    "hot-dog",
+    "donut",
+    "gateau",
+    "canape",
+    "lit",
+    "vase",
+    "ordinateur",
+    "telephone",
+    "four",
+    "frigo",
+    "livre",
+    "ours en peluche",
+  }
+)
+
+_VISION_NEED_RE = re.compile(
+  r"(?i)(?:"
+  r"what\s+do\s+you\s+see|what\s+can\s+you\s+see|do\s+you\s+see|"
+  r"what('?s|\s+is)\s+(?:in\s+front|ahead|there|that)|"
+  r"look\s+(?:around|at|ahead)|can\s+you\s+look|show\s+me\s+what|"
+  r"is\s+there\s+(?:a|an|any)|are\s+there\s+(?:any|a)|"
+  r"where\s+is\s+(?:the|a|an)|where\s+are\s+(?:the|my)|"
+  r"in\s+front\s+of\s+you|around\s+you|"
+  r"qu['’ ]?est[- ]?ce\s+que\s+tu\s+vois|que\s+vois[- ]?tu|"
+  r"tu\s+vois|vois[- ]?tu|regarde|devant\s+toi|"
+  r"y\s+a[- ]?t[- ]?il|est[- ]?ce\s+qu['’]?\s*il\s+y\s+a|"
+  r"ou\s+(?:est|sont)|qu['’]?est[- ]?ce\s+qu['’]?\s*il\s+y\s+a|"
+  r"was\s+siehst|was\s+kannst\s+du\s+sehen|siehst\s+du|"
+  r"schau(?:e)?\s|vor\s+dir|gibt\s+es|"
+  r"wo\s+ist|wo\s+sind"
+  r")"
+)
+
+
+def needs_vision_capture(text: str) -> bool:
+  """True when the user utterance likely needs a fresh camera capture."""
+  t = (text or "").strip()
+  if len(t) < 3:
+    return False
+  return bool(_VISION_NEED_RE.search(t))
+
+
+def translate_label(label: str, lang: str = "en") -> str:
+  """Map English YOLO/COCO label to the spoken language."""
+  key = str(label or "thing").replace("_", " ").strip().lower()
+  lang = (lang or "en").lower()[:2]
+  row = _LABEL_I18N.get(key)
+  if row:
+    return row.get(lang) or row.get("en") or key
+  return key
+
 
 def looks_like_vision_dump(text: str) -> bool:
   """True if model output is parroting camera/system vision notes."""
@@ -26,7 +190,6 @@ def looks_like_vision_dump(text: str) -> bool:
     return False
   if _VISION_DUMP_RE.search(text):
     return True
-  # Compact JSON camera blob echoed back
   if '"objects"' in text and ("\"path\"" in text or "side" in text):
     return True
   if text.count("|") >= 2 and ("m to the" in text.lower() or "~" in text):
@@ -63,6 +226,7 @@ class SceneIngest:
     self._client = None
     self._error: Optional[str] = None
     self._scene_event = threading.Event()
+    self._inject_context = False
 
   def start(self) -> None:
     try:
@@ -97,6 +261,14 @@ class SceneIngest:
       self._client.loop_stop()
       self._client.disconnect()
       self._client = None
+
+  def set_inject_context(self, enabled: bool) -> None:
+    """Only inject CameraJSON into the LLM when a capture was requested for this turn."""
+    self._inject_context = bool(enabled)
+
+  @property
+  def inject_context(self) -> bool:
+    return self._inject_context
 
   def _on_connect(self, client, userdata, flags, reason_code, properties=None):
     client.subscribe(self.topic)
@@ -162,12 +334,15 @@ class SceneIngest:
 
   def context_line(self) -> str:
     """Compact private camera JSON for the system prompt (not for speaking)."""
+    if not self._inject_context:
+      return ""
     with self._lock:
       objects = list(self._objects)
       hint = self._hint
       age = time.time() - self._ts
 
     # Prefer objects; omit path when objects exist so the LLM does not fixate on floor.
+    # Object names stay English (YOLO); the model must translate when speaking.
     payload: dict[str, Any] = {
       "objects": [
         {
@@ -188,31 +363,23 @@ class SceneIngest:
     with self._lock:
       return bool(self._objects)
 
-  def object_mention_tokens(self) -> list[str]:
+  def object_mention_tokens(self, lang: str = "en") -> list[str]:
     """Tokens that should appear in a good spoken answer about current objects."""
     with self._lock:
       objects = list(self._objects)
     tokens: list[str] = []
-    aliases = {
-      "potted plant": ["plant", "plante", "pflanze", "pot", "flower", "fleur"],
-      "person": ["person", "personne", "people", "gens", "somebody", "quelqu"],
-      "vase": ["vase"],
-      "chair": ["chair", "chaise", "stuhl"],
-      "couch": ["couch", "sofa", "canape"],
-      "bottle": ["bottle", "bouteille", "flasche"],
-      "cup": ["cup", "tasse", "becher"],
-      "book": ["book", "livre", "buch"],
-      "tv": ["tv", "television", "tele"],
-      "laptop": ["laptop", "ordinateur", "computer"],
-    }
     for o in objects:
       label = str(o.get("label") or "").replace("_", " ").lower()
       if not label:
         continue
       tokens.append(label)
       tokens.extend(label.split())
-      tokens.extend(aliases.get(label, []))
-    # unique, skip tiny tokens
+      for code in ("en", "fr", "de"):
+        translated = translate_label(label, code)
+        tokens.append(translated)
+        tokens.extend(translated.replace("-", " ").split())
+      # Also accept spoken-lang form specifically
+      tokens.append(translate_label(label, lang))
     out: list[str] = []
     for t in tokens:
       t = t.lower().strip()
@@ -220,11 +387,11 @@ class SceneIngest:
         out.append(t)
     return out
 
-  def reply_mentions_objects(self, reply: str) -> bool:
+  def reply_mentions_objects(self, reply: str, lang: str = "en") -> bool:
     if not reply or not self.has_objects():
       return False
     text = reply.lower()
-    return any(tok in text for tok in self.object_mention_tokens())
+    return any(tok in text for tok in self.object_mention_tokens(lang))
 
   def spoken_glimpse(self, lang: str = "en") -> str:
     """Kid-friendly spoken line from the latest objects (never raw CameraJSON)."""
@@ -249,35 +416,31 @@ class SceneIngest:
 
     parts: list[str] = []
     for o in objects[:3]:
-      name = str(o.get("label") or "thing").replace("_", " ")
-      name = {
-        "potted plant": {"en": "plant", "fr": "plante", "de": "Pflanze"},
-        "person": {"en": "person", "fr": "personne", "de": "Person"},
-        "vase": {"en": "vase", "fr": "vase", "de": "Vase"},
-        "chair": {"en": "chair", "fr": "chaise", "de": "Stuhl"},
-      }.get(name, {}).get(lang, name)
+      name = translate_label(str(o.get("label") or "thing"), lang)
       side = str(o.get("bearing") or "center")
       side_word = {
         "left": {"en": "on the left", "fr": "a gauche", "de": "links"},
         "right": {"en": "on the right", "fr": "a droite", "de": "rechts"},
         "center": {"en": "in front of me", "fr": "devant moi", "de": "vor mir"},
       }.get(side, {}).get(lang, side)
-      parts.append(f"{name} {side_word}")
+      parts.append((name, side_word))
 
     if lang == "fr":
-      def _fr_np(part: str) -> str:
-        # part is like "plante a gauche"
-        noun = part.split()[0]
-        article = "un" if noun in ("vase",) else "une"
-        return f"{article} {part}"
+      def _fr_np(name: str, side_word: str) -> str:
+        head = name.split()[0]
+        article = "un" if name in _FR_MASC or head in _FR_MASC else "une"
+        return f"{article} {name} {side_word}"
 
-      if len(parts) == 1:
-        return f"Je vois {_fr_np(parts[0])}!"
-      return "Je vois " + ", ".join(_fr_np(p) for p in parts[:-1]) + f" et {_fr_np(parts[-1])}!"
+      np = [_fr_np(n, s) for n, s in parts]
+      if len(np) == 1:
+        return f"Je vois {np[0]}!"
+      return "Je vois " + ", ".join(np[:-1]) + f" et {np[-1]}!"
     if lang == "de":
-      if len(parts) == 1:
-        return f"Ich sehe {parts[0]}!"
-      return "Ich sehe " + ", ".join(parts[:-1]) + f" und {parts[-1]}!"
-    if len(parts) == 1:
-      return f"I see a {parts[0]}!"
-    return "I see " + ", ".join(parts[:-1]) + f", and {parts[-1]}!"
+      spoken = [f"{n} {s}" for n, s in parts]
+      if len(spoken) == 1:
+        return f"Ich sehe {spoken[0]}!"
+      return "Ich sehe " + ", ".join(spoken[:-1]) + f" und {spoken[-1]}!"
+    spoken = [f"{n} {s}" for n, s in parts]
+    if len(spoken) == 1:
+      return f"I see a {spoken[0]}!"
+    return "I see " + ", ".join(f"a {p}" for p in spoken[:-1]) + f", and a {spoken[-1]}!"
