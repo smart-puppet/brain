@@ -94,6 +94,22 @@ audio:
 
 Logs look like `DoA voice direction 127° (SE) speech` on the `puppet.respeaker` logger (visible when `logging.level: DEBUG`).
 
+### Face the speaker (DoA → drive)
+
+With the ReSpeaker profile, Puppet can turn toward the child before answering:
+
+```yaml
+audio:
+  respeaker:
+    face_speaker: true
+    doa_front_deg: 60      # ~60° = in front; ~180° = to the robot's right
+    doa_deadband_deg: 25
+    doa_ms_per_deg: 8      # tune spin duration
+    doa_invert: false
+```
+
+Brain latches DoA while you speak, then publishes a one-shot `turn_left` / `turn_right` on `robot/drive/cmd` when the reply starts (needs the drive MQTT bridge running). Set `doa_invert: true` if left/right feel mirrored.
+
 ### VAD disabled
 
 If you disable VAD (`vad.enabled: false`), speech detection falls back to mic RMS (`audio.speech_rms_threshold`). Without this, STT was reset on every chunk after each reply and Nemotron never decoded speech.

@@ -200,7 +200,39 @@ class Orchestrator:
     )
     self._respeaker_doa = RespeakerDoaMonitor(config)
     if self._respeaker_doa.enabled:
-      logger.info("ReSpeaker DoA debug enabled (puppet.respeaker logger)")
+      logger.info(
+        "ReSpeaker DoA tracking enabled (debug=%s)",
+        self._respeaker_doa.debug,
+      )
+
+    self._drive = None
+    rs_cfg = audio_cfg.get("respeaker", {}) or {}
+    face_speaker = bool(rs_cfg.get("face_speaker", False))
+    if face_speaker:
+      try:
+        from puppet.mqtt.drive import DriveClient
+
+        self._drive = DriveClient(
+          broker=str(mqtt_cfg.get("broker", "127.0.0.1")),
+          port=int(mqtt_cfg.get("port", 1883)),
+          cmd_topic=str(mqtt_cfg.get("drive_cmd_topic", "robot/drive/cmd")),
+          front_deg=float(rs_cfg.get("doa_front_deg", 60)),
+          deadband_deg=float(rs_cfg.get("doa_deadband_deg", 25)),
+          max_turn_deg=float(rs_cfg.get("doa_max_turn_deg", 120)),
+          ms_per_deg=float(rs_cfg.get("doa_ms_per_deg", 8)),
+          turn_speed=int(rs_cfg.get("doa_turn_speed", 120)),
+          ttl_ms=int(rs_cfg.get("doa_turn_ttl_ms", 300)),
+          invert=bool(rs_cfg.get("doa_invert", False)),
+        )
+        self._drive.start()
+        logger.info(
+          "Face-speaker enabled (front≈%s°, deadband=%s°)",
+          rs_cfg.get("doa_front_deg", 60),
+          rs_cfg.get("doa_deadband_deg", 25),
+        )
+      except Exception as exc:  # noqa: BLE001
+        logger.warning("Face-speaker drive disabled: %s", exc)
+        self._drive = None
     self._mouth_fallback_flip_ms = int(
       mouth_cfg.get("fallback_flip_ms", mouth_cfg.get("stupid_flip_ms", 200))
     )
@@ -574,6 +606,7 @@ class Orchestrator:
     for event in events:
       if event.kind == "start":
         self._speech_active = True
+        self._respeaker_doa.clear_utterance()
         if self.state == PipelineState.LISTENING:
           if self._await_fresh_speech:
             if self._tts_playback_active or time.monotonic() < self._echo_quiet_until:
@@ -746,6 +779,9 @@ class Orchestrator:
     self._speaking_since = 0.0
     self._playback_started_at = 0.0
 
+    # Face the speaker using latched DoA, then think/speak (turn runs while LLM works).
+    self._maybe_face_speaker()
+
     # Only ask eyes for a fresh scene when the user utterance is about seeing the room.
     want_vision = self._scene_ingest is not None and (
       self._capture_every_reply or self._needs_vision_capture(prompt)
@@ -773,6 +809,18 @@ class Orchestrator:
       on_done=self._on_generation_done,
     )
     self.bus.emit("generation_started", draft=self.conversation.draft_user, epoch=epoch)
+
+  def _maybe_face_speaker(self) -> None:
+    """Publish a one-shot turn so the chassis faces the latched DoA direction."""
+    if self._drive is None or not self._respeaker_doa.enabled:
+      if self._respeaker_doa.enabled:
+        self._respeaker_doa.clear_utterance()
+      return
+    az = self._respeaker_doa.take_utterance_azimuth()
+    if az is None:
+      logger.debug("DoA face skipped — no azimuth samples this utterance")
+      return
+    self._drive.face_azimuth(az)
 
   @staticmethod
   def _is_simple_see_question(text: str) -> bool:
@@ -1064,7 +1112,7 @@ class Orchestrator:
   def _handle_audio_chunk(self, mic: np.ndarray, sample_rate: int) -> None:
     self._last_mic_rms = rms_energy(mic)
     self._handle_vad_events(mic)
-    self._respeaker_doa.maybe_log(speech_active=self._user_speaking_now())
+    self._respeaker_doa.poll(speech_active=self._user_speaking_now())
     self._unlock_fresh_speech()
     if (
       self._respeaker_interrupt_enabled
@@ -1138,3 +1186,9 @@ class Orchestrator:
       self._playback = None
     self._mouth.close()
     self._respeaker_doa.close()
+    if self._drive is not None:
+      self._drive.stop()
+      self._drive = None
+    if self._scene_ingest is not None:
+      self._scene_ingest.stop()
+      self._scene_ingest = None

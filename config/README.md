@@ -52,8 +52,23 @@ Profile files: `config/profiles/respeaker.yaml`, `config/profiles/regular-mic.ya
 | `scene_topic` | `robot/nav/scene` | Scene result topic |
 | `capture_timeout_s` | `60` | Max wait for a matching scene |
 | `capture_view` | `traverse` | Eyes view mode for the capture |
+| `drive_cmd_topic` | `robot/drive/cmd` | One-shot turns when `face_speaker` is on |
 
 Requires Mosquitto + eyes debug_web (or equivalent) listening for captures.
+
+### Face speaker (ReSpeaker DoA → drive)
+
+In `profiles/respeaker.yaml` → `audio.respeaker`:
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `face_speaker` | `true` | Latch DoA while speaking; turn toward speaker before reply |
+| `doa_front_deg` | `60` | DoA when the speaker is ahead (~180° = to the robot's right) |
+| `doa_deadband_deg` | `25` | Skip turns smaller than this |
+| `doa_ms_per_deg` | `8` | Turn duration scaling (tune on hardware) |
+| `doa_invert` | `false` | Flip left/right if mounting is mirrored |
+
+Needs the drive MQTT bridge running.
 
 ## Common tuning
 

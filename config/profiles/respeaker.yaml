@@ -10,6 +10,15 @@ audio:
     interrupt_timeout_ms: 400      # resume if no STT text in this window (noise)
     doa_debug: true              # true + logging.level DEBUG → direction logs
     doa_poll_ms: 250
+    # Auto-turn chassis toward the speaker using DoA (needs drive MQTT bridge).
+    # ~60° = in front; ~180° = to the robot's right.
+    face_speaker: true
+    doa_front_deg: 60
+    doa_deadband_deg: 25         # skip tiny turns
+    doa_max_turn_deg: 120
+    doa_ms_per_deg: 16            # tune: larger = slower/longer spin
+    doa_turn_speed: 120
+    doa_invert: false            # true if left/right feel mirrored
 
 vad:
   enabled: true       # Silero: turn boundaries (not STT gating)

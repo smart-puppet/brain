@@ -34,3 +34,4 @@ mqtt:
   capture_view: traverse
   capture_timeout_s: 60.0
   vision_min_interval_s: 1.0
+  drive_cmd_topic: robot/drive/cmd

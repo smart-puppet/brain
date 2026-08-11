@@ -3,6 +3,7 @@ from unittest.mock import patch
 from puppet.core.audio.respeaker import (
   device_name_matches_respeaker,
   maybe_reset_respeaker_on_start,
+  signed_heading_error_deg,
 )
 
 
@@ -54,6 +55,13 @@ def test_doa_reading_compass() -> None:
   assert DoaReading(180, False).compass == "S"
 
 
+def test_signed_heading_error_front_and_right() -> None:
+  # ~60° = front, ~180° = right of robot
+  assert abs(signed_heading_error_deg(60, front_deg=60)) < 1e-6
+  assert abs(signed_heading_error_deg(50, front_deg=60) - (-10)) < 1e-6
+  assert abs(signed_heading_error_deg(180, front_deg=60) - 120) < 1e-6
+
+
 def test_doa_monitor_logs_when_speaking() -> None:
   from puppet.core.audio.respeaker import DoaReading, RespeakerDoaMonitor
 
@@ -63,8 +71,9 @@ def test_doa_monitor_logs_when_speaking() -> None:
   reading = DoaReading(45, True)
   with patch.object(monitor, "_ensure_usb", return_value=True):
     with patch("puppet.core.audio.respeaker.read_doa", return_value=reading):
-      monitor.maybe_log(speech_active=True)
+      monitor.poll(speech_active=True)
   assert monitor._last_log == (45, True)
+  assert monitor.take_utterance_azimuth() == 45
   monitor.close()
 
 
@@ -73,6 +82,44 @@ def test_doa_monitor_silent_when_not_speaking() -> None:
 
   monitor = RespeakerDoaMonitor({"audio": {"respeaker": {"doa_debug": True}}})
   with patch("puppet.core.audio.respeaker.read_doa") as read_doa:
-    monitor.maybe_log(speech_active=False)
+    monitor.poll(speech_active=False)
     read_doa.assert_not_called()
   monitor.close()
+
+
+def test_doa_monitor_face_speaker_enables_without_debug() -> None:
+  from puppet.core.audio.respeaker import RespeakerDoaMonitor
+
+  monitor = RespeakerDoaMonitor({"audio": {"respeaker": {"face_speaker": True, "doa_debug": False}}})
+  assert monitor.enabled
+  assert not monitor.debug
+  monitor.close()
+
+
+def test_drive_face_azimuth_turns_right() -> None:
+  from puppet.mqtt.drive import DriveClient
+
+  client = DriveClient(front_deg=60, deadband_deg=25, ms_per_deg=8, max_turn_deg=120)
+  published: list[dict] = []
+
+  def _pub(body):
+    published.append(body)
+    return {"ok": True, "published": body}
+
+  client.publish_cmd = _pub  # type: ignore[method-assign]
+  result = client.face_azimuth(180)
+  assert result["ok"]
+  assert not result.get("skipped")
+  assert published[0]["cmd"] == "turn_right"
+  assert published[0]["dur"] == 120 * 8  # clamped to max_turn_deg
+
+
+def test_drive_face_azimuth_skips_near_front() -> None:
+  from puppet.mqtt.drive import DriveClient
+
+  client = DriveClient(front_deg=60, deadband_deg=25)
+  published: list[dict] = []
+  client.publish_cmd = lambda body: published.append(body) or {"ok": True}  # type: ignore[method-assign]
+  result = client.face_azimuth(50)
+  assert result.get("skipped")
+  assert published == []

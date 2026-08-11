@@ -338,28 +338,73 @@ def _resolve_input_device_name(config: dict[str, Any], device_index: int | None)
     return None
 
 
+def signed_heading_error_deg(azimuth_deg: float, *, front_deg: float = 60.0) -> float:
+  """Signed error from chassis front to DoA (positive = speaker to the right).
+
+  With the ReSpeaker mounted on Puppet, ~60° is ahead and ~180° is to the
+  robot's right, so front_deg defaults to 60.
+  """
+  return ((float(azimuth_deg) - float(front_deg) + 180.0) % 360.0) - 180.0
+
+
+def _circular_median_deg(samples: list[int]) -> int | None:
+  """Median angle on a circle (degrees)."""
+  if not samples:
+    return None
+  if len(samples) == 1:
+    return int(samples[0]) % 360
+  # Project onto unit circle, take atan2 of mean — robust for clusters <180°.
+  import math
+
+  xs = sum(math.cos(math.radians(a)) for a in samples)
+  ys = sum(math.sin(math.radians(a)) for a in samples)
+  if abs(xs) < 1e-9 and abs(ys) < 1e-9:
+    return int(samples[-1]) % 360
+  return int(round(math.degrees(math.atan2(ys, xs)))) % 360
+
+
 class RespeakerDoaMonitor:
-  """Poll XVF3800 DoA and emit debug logs while the user is speaking."""
+  """Poll XVF3800 DoA while the user is speaking (debug log + utterance latch)."""
 
   def __init__(self, config: dict[str, Any]) -> None:
     rs_cfg = config.get("audio", {}).get("respeaker", {})
-    self._enabled = bool(rs_cfg.get("doa_debug", False))
+    self._debug = bool(rs_cfg.get("doa_debug", False))
+    self._track = bool(rs_cfg.get("face_speaker", False)) or self._debug
     self._poll_s = max(0.05, int(rs_cfg.get("doa_poll_ms", 250)) / 1000.0)
     self._vendor_id = int(rs_cfg.get("vendor_id", DEFAULT_RESPEAKER_VENDOR_ID))
     self._product_ids = tuple(int(pid) for pid in rs_cfg.get("product_ids", DEFAULT_RESPEAKER_PRODUCT_IDS))
+    self._prefer_speech_flag = bool(rs_cfg.get("doa_require_speech_flag", True))
     self._last_poll = 0.0
     self._last_log: tuple[int, bool] | None = None
     self._usb_dev: object | None = None
     self._active_product_id: int | None = None
+    self._utterance_samples: list[int] = []
+    self._last_reading: DoaReading | None = None
 
   @property
   def enabled(self) -> bool:
-    return self._enabled
+    return self._track
+
+  @property
+  def debug(self) -> bool:
+    return self._debug
 
   def close(self) -> None:
     _close_xvf_usb(self._usb_dev)
     self._usb_dev = None
     self._active_product_id = None
+
+  def clear_utterance(self) -> None:
+    self._utterance_samples.clear()
+
+  def take_utterance_azimuth(self) -> int | None:
+    """Median DoA for the current utterance, then clear the latch."""
+    az = _circular_median_deg(self._utterance_samples)
+    self._utterance_samples.clear()
+    return az
+
+  def peek_utterance_azimuth(self) -> int | None:
+    return _circular_median_deg(self._utterance_samples)
 
   def _ensure_usb(self) -> bool:
     if self._usb_dev is not None:
@@ -373,31 +418,41 @@ class RespeakerDoaMonitor:
     return False
 
   def maybe_log(self, *, speech_active: bool) -> None:
-    if not self._enabled or not speech_active:
-      return
+    """Backward-compatible alias for poll()."""
+    self.poll(speech_active=speech_active)
+
+  def poll(self, *, speech_active: bool) -> DoaReading | None:
+    if not self._track or not speech_active:
+      return None
     now = time.monotonic()
     if now - self._last_poll < self._poll_s:
-      return
+      return self._last_reading
     self._last_poll = now
     if not self._ensure_usb():
-      return
+      return None
     reading = read_doa(
       vendor_id=self._vendor_id,
       product_ids=(self._active_product_id,) if self._active_product_id is not None else self._product_ids,
       dev=self._usb_dev,
     )
     if reading is None:
-      return
+      return None
+    self._last_reading = reading
+    if reading.speech_detected or not self._prefer_speech_flag:
+      self._utterance_samples.append(int(reading.azimuth_deg) % 360)
+      # Cap memory for long utterances
+      if len(self._utterance_samples) > 40:
+        self._utterance_samples = self._utterance_samples[-40:]
     key = (reading.azimuth_deg, reading.speech_detected)
-    if key == self._last_log:
-      return
-    self._last_log = key
-    logger.debug(
-      "DoA voice direction %d° (%s)%s",
-      reading.azimuth_deg,
-      reading.compass,
-      " speech" if reading.speech_detected else "",
-    )
+    if self._debug and key != self._last_log:
+      self._last_log = key
+      logger.debug(
+        "DoA voice direction %d° (%s)%s",
+        reading.azimuth_deg,
+        reading.compass,
+        " speech" if reading.speech_detected else "",
+      )
+    return reading
 
 
 def maybe_reset_respeaker_on_start(
