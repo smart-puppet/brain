@@ -23,8 +23,13 @@ mqtt:
   enabled: false
   # Inject eyes traversability hints into Gemma's system prompt (see ../../docs/mqtt.md).
   vision_enabled: true
+  # Before each LLM reply, publish robot/nav/capture and wait for a fresh scene.
+  capture_before_reply: true
   broker: 127.0.0.1
   port: 1883
   topic_prefix: puppet
   scene_topic: robot/nav/scene
+  capture_topic: robot/nav/capture
+  capture_view: traverse
+  capture_timeout_s: 60.0
   vision_min_interval_s: 1.0

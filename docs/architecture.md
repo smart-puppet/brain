@@ -30,7 +30,9 @@ Mic → Silero VAD → STT (streaming partials → draft_user)
 
 ## Why not MQTT for audio?
 
-MQTT is suitable for **control events** (optional, disabled by default). Real-time PCM stays **in-process**.
+MQTT is suitable for **control and perception events** (vision capture / scene). Real-time PCM stays **in-process**.
+
+With `mqtt.vision_enabled: true` and `capture_before_reply: true`, brain publishes `robot/nav/capture` before each reply and injects the resulting `Vision:` line into Gemma's system prompt (see `../../docs/mqtt.md`).
 
 ## Config
 

@@ -79,13 +79,38 @@ class Orchestrator:
           broker=str(mqtt_cfg.get("broker", "127.0.0.1")),
           port=int(mqtt_cfg.get("port", 1883)),
           topic=str(mqtt_cfg.get("scene_topic", "robot/nav/scene")),
+          capture_topic=str(mqtt_cfg.get("capture_topic", "robot/nav/capture")),
           min_interval_s=float(mqtt_cfg.get("vision_min_interval_s", 1.0)),
+          capture_timeout_s=float(mqtt_cfg.get("capture_timeout_s", 60.0)),
+          capture_view=str(mqtt_cfg.get("capture_view", "traverse")),
         )
         self._scene_ingest.start()
         if hasattr(self.llm, "set_vision_hint_fn"):
           self.llm.set_vision_hint_fn(self._scene_ingest.context_line)
+        if bool(mqtt_cfg.get("capture_before_reply", True)) and hasattr(
+          self.llm, "set_vision_refresh_fn"
+        ):
+          def _refresh_vision() -> None:
+            result = self._scene_ingest.request_capture()
+            if not result.get("ok"):
+              logger.warning("Vision capture failed: %s", result.get("error"))
+              return
+            line = self._scene_ingest.context_line()
+            nobj = len(result.get("objects") or [])
+            logger.info(
+              "Vision capture ok objects=%s hint=%r → %s",
+              nobj,
+              result.get("hint"),
+              line or "(empty)",
+            )
+
+          self.llm.set_vision_refresh_fn(_refresh_vision)
       except Exception as exc:  # noqa: BLE001
         logger.warning("Vision MQTT ingest disabled: %s", exc)
+
+    from puppet.mqtt.scene import looks_like_vision_dump
+
+    self._looks_like_vision_dump = looks_like_vision_dump
 
     self._stt_rate = int(audio_cfg.get("sample_rate", 16000))
     # ReSpeaker-first default: keep continuous decode and avoid false interruptions.
@@ -198,7 +223,8 @@ class Orchestrator:
       on_phrase_begin=self._on_tts_phrase_begin,
       on_phrase_end=self._on_tts_phrase_end,
     )
-
+    self._vision_lang = str((config.get("language") or {}).get("active") or "en")
+    self._block_vision_tts = False
     self._worker = GenerationWorker(
       self.llm,
       phrase_delimiters=self._phrase_delimiters,
@@ -206,6 +232,7 @@ class Orchestrator:
       min_first_phrase_chars=self._min_first_phrase_chars,
       first_phrase_max_wait_ms=self._first_phrase_max_wait_ms,
       phrase_playback=self._tts_pipeline,
+      phrase_filter=self._allow_tts_phrase,
     )
 
   @staticmethod
@@ -721,6 +748,7 @@ class Orchestrator:
     self._recent_tts_phrases.clear()
     self._spoken_reply_corpus = ""
     self._current_reply_text = ""
+    self._block_vision_tts = False
     self._reply_in_progress = True
     self._suspend_stt_for_llm()
     prompt = self.conversation.draft_user.strip()
@@ -729,12 +757,76 @@ class Orchestrator:
     self._set_state(PipelineState.THINKING)
     self._speaking_since = 0.0
     self._playback_started_at = 0.0
+
+    # "What do you see?" → capture + speak object glimpse (small LLMs ignore CameraJSON).
+    if self._try_vision_glimpse_reply(prompt):
+      return
+
     epoch = self._worker.start(
       self.conversation,
       on_token=self._on_llm_token,
       on_done=self._on_generation_done,
     )
     self.bus.emit("generation_started", draft=self.conversation.draft_user, epoch=epoch)
+
+  @staticmethod
+  def _is_vision_question(text: str) -> bool:
+    t = (text or "").lower()
+    keys = (
+      "what do you see",
+      "what can you see",
+      "do you see",
+      "look",
+      "qu'est-ce que tu vois",
+      "quest-ce que tu vois",
+      "qu est ce que tu vois",
+      "tu vois",
+      "que vois",
+      "vois-tu",
+      "vois tu",
+      "regarde",
+      "devant toi",
+      "was siehst",
+      "was kannst du sehen",
+      "siehst du",
+    )
+    return any(k in t for k in keys)
+
+  def _finish_spoken_turn(self, spoken: str, *, user_text: str, tag: str = "") -> None:
+    if spoken:
+      self.conversation.add_assistant(spoken)
+      self.bus.emit("assistant_reply", text=spoken)
+    if user_text:
+      logger.info("User: %s", user_text)
+    if spoken:
+      logger.info("Assistant%s: %s", tag, spoken)
+    self._set_state(PipelineState.LISTENING)
+    self._reply_in_progress = False
+    self._current_reply_text = ""
+    self._stop_tts_playback()
+    self._end_stt_turn()
+    self._enter_post_reply_listen()
+    self.bus.emit("generation_done", epoch=self._worker.epoch)
+
+  def _try_vision_glimpse_reply(self, prompt: str) -> bool:
+    if self._scene_ingest is None or not self._is_vision_question(prompt):
+      return False
+    result = self._scene_ingest.request_capture()
+    if not result.get("ok"):
+      logger.warning("Vision glimpse capture failed: %s", result.get("error"))
+      return False
+    glimpse = self._scene_ingest.spoken_glimpse(self._vision_lang)
+    nobj = len(result.get("objects") or [])
+    logger.info("Vision question → glimpse objects=%s: %s", nobj, glimpse)
+    self._set_state(PipelineState.SPEAKING)
+    self._tts_pipeline.submit(glimpse)
+    self._tts_pipeline.wait_done()
+    user_text = self.conversation.commit_draft()
+    self._latency.mark_turn_end()
+    self._log_turn_summary()
+    self._resume_stt_after_llm()
+    self._finish_spoken_turn(glimpse, user_text=user_text, tag=" (vision glimpse)")
+    return True
 
   def _log_turn_summary(self) -> None:
     report = self._latency.report()
@@ -764,6 +856,19 @@ class Orchestrator:
       return
     self._start_generation()
 
+  def _allow_tts_phrase(self, text: str) -> bool:
+    """Block camera-note dumps from being spoken by Piper."""
+    if self._block_vision_tts:
+      return False
+    if self._looks_like_vision_dump(text):
+      self._block_vision_tts = True
+      return False
+    lowered = text.lower()
+    if any(tok in lowered for tok in ("| path", "| ranges", "camerajson", "~1.", "~2.")):
+      self._block_vision_tts = True
+      return False
+    return True
+
   def _on_generation_done(self, reply: str, epoch: int) -> None:
     if epoch != self._worker.epoch:
       return
@@ -772,23 +877,39 @@ class Orchestrator:
     self._log_turn_summary()
     self._resume_stt_after_llm()
 
+    spoken = (reply or "").strip()
+    replaced = False
+    need_glimpse = False
+    if self._scene_ingest is not None:
+      if (
+        self._worker.suppressed_phrases > 0
+        or self._block_vision_tts
+        or self._looks_like_vision_dump(spoken)
+      ):
+        need_glimpse = True
+      elif self._scene_ingest.has_objects() and not self._scene_ingest.reply_mentions_objects(
+        spoken
+      ):
+        # Model answered but ignored YOLO objects (e.g. only talked about the floor).
+        need_glimpse = True
+        logger.warning("LLM ignored detected objects; forcing glimpse")
+
+    if need_glimpse and self._scene_ingest is not None:
+      glimpse = self._scene_ingest.spoken_glimpse(self._vision_lang)
+      logger.info("Replacing reply with glimpse. Was: %s", spoken[:200])
+      self._tts_pipeline.stop()
+      self._stop_tts_playback()
+      spoken = glimpse
+      replaced = True
+      self._tts_pipeline.submit(spoken)
+      self._tts_pipeline.wait_done()
+
     user_text = self.conversation.commit_draft()
-    if reply:
-      self.conversation.add_assistant(reply)
-      self.bus.emit("assistant_reply", text=reply)
-
-    if user_text:
-      logger.info("User: %s", user_text)
-    if reply:
-      logger.info("Assistant: %s", reply)
-
-    self._set_state(PipelineState.LISTENING)
-    self._reply_in_progress = False
-    self._current_reply_text = ""
-    self._stop_tts_playback()
-    self._end_stt_turn()
-    self._enter_post_reply_listen()
-    self.bus.emit("generation_done", epoch=epoch)
+    self._finish_spoken_turn(
+      spoken,
+      user_text=user_text,
+      tag=" (glimpse)" if replaced else "",
+    )
 
   @staticmethod
   def _is_stt_noise_tail(text: str) -> bool:

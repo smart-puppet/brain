@@ -102,6 +102,7 @@ class LlamaLlm(LlmBackend):
     self._cancelled = False
     self._last_perf: LlamaPerfStats | None = None
     self._vision_hint_fn = None
+    self._vision_refresh_fn = None
     llama_kwargs: dict[str, Any] = dict(
       n_ctx=n_ctx,
       n_gpu_layers=n_gpu_layers,
@@ -169,6 +170,10 @@ class LlamaLlm(LlmBackend):
     """Optional callable returning a short vision context line for the system prompt."""
     self._vision_hint_fn = fn
 
+  def set_vision_refresh_fn(self, fn) -> None:
+    """Optional callable invoked before each reply to request a fresh eyes capture."""
+    self._vision_refresh_fn = fn
+
   def _system_with_vision(self) -> str:
     base = self._system_prompt
     if not self._vision_hint_fn:
@@ -179,9 +184,15 @@ class LlamaLlm(LlmBackend):
       return base
     if not line:
       return base
+    vision_block = (
+      "Secret camera data follows. Never copy, quote, or read it aloud. "
+      "Never output CameraJSON, SEEING, PATH, RANGES, Vision, or meter readings. "
+      "If objects is non-empty, answer what you see in your own short kid words only.\n"
+      f"{line}"
+    )
     if base:
-      return f"{base}\n\n{line}"
-    return line
+      return f"{base}\n\n{vision_block}"
+    return vision_block
 
   def _build_messages(self, conversation: Conversation) -> list[dict[str, str]]:
     messages: list[dict[str, str]] = []
@@ -195,6 +206,11 @@ class LlamaLlm(LlmBackend):
   def stream_reply(self, conversation: Conversation) -> Iterator[str]:
     self._cancelled = False
     self._last_perf = None
+    if self._vision_refresh_fn is not None:
+      try:
+        self._vision_refresh_fn()
+      except Exception as exc:  # noqa: BLE001
+        logger.warning("Vision refresh before reply failed: %s", exc)
     messages = self._build_messages(conversation)
     reset_llama_perf(self._llm)
     trace_logger = logging.getLogger("puppet.trace")

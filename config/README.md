@@ -33,7 +33,7 @@ Profile files: `config/profiles/respeaker.yaml`, `config/profiles/regular-mic.ya
 
 | File | What it controls | Touch when… |
 |------|------------------|-------------|
-| `default.yaml` | Profile name, core audio I/O, logging, MQTT | Changing mic type, log level, ALSA devices |
+| `default.yaml` | Profile name, core audio I/O, logging, MQTT vision/capture | Changing mic type, log level, ALSA devices, vision capture |
 | `profiles/*.yaml` | Mic-specific VAD / barge-in / ReSpeaker USB | Switching between ReSpeaker and regular mic |
 | `language.yaml` | Active locale + per-language STT/TTS/LLM prompts | Adding a language or editing Kace's persona |
 | `stt.yaml` | Nemotron model path, streaming chunk size, GPU suspend | STT latency, model swap |
@@ -41,6 +41,19 @@ Profile files: `config/profiles/respeaker.yaml`, `config/profiles/regular-mic.ya
 | `tts.yaml` | Piper threads, phrase lead-in silence | Clipped first word, CPU load |
 | `vad.yaml` | Silero model + silence timing | LLM fires too early / too late |
 | `puppet.yaml` | Turn timing, echo guards, jaw servo | Lip sync, conversation flow, servo wiring |
+
+## Vision MQTT (`default.yaml` → `mqtt`)
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `vision_enabled` | `true` | Subscribe to `robot/nav/scene` and inject `Vision:` into Gemma |
+| `capture_before_reply` | `true` | Before each reply, publish `robot/nav/capture` and wait |
+| `capture_topic` | `robot/nav/capture` | Capture request topic (eyes must be running) |
+| `scene_topic` | `robot/nav/scene` | Scene result topic |
+| `capture_timeout_s` | `60` | Max wait for a matching scene |
+| `capture_view` | `traverse` | Eyes view mode for the capture |
+
+Requires Mosquitto + eyes debug_web (or equivalent) listening for captures.
 
 ## Common tuning
 

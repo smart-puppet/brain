@@ -26,6 +26,7 @@ class GenerationWorker:
     min_first_phrase_chars: int = 8,
     first_phrase_max_wait_ms: int = 0,
     phrase_playback: PhrasePlayback,
+    phrase_filter: Callable[[str], bool] | None = None,
   ) -> None:
     self._llm = llm
     self._phrase_delimiters = phrase_delimiters
@@ -33,10 +34,12 @@ class GenerationWorker:
     self._min_first_phrase_chars = min_first_phrase_chars
     self._first_phrase_max_wait_s = max(0, first_phrase_max_wait_ms) / 1000.0
     self._phrase_playback = phrase_playback
+    self._phrase_filter = phrase_filter
     self._lock = threading.Lock()
     self._cancel = threading.Event()
     self._epoch = 0
     self._thread: threading.Thread | None = None
+    self.suppressed_phrases = 0
 
   @property
   def epoch(self) -> int:
@@ -73,6 +76,7 @@ class GenerationWorker:
       self.stop()
       self._epoch += 1
       epoch = self._epoch
+      self.suppressed_phrases = 0
       self._cancel.clear()
       self._thread = threading.Thread(
         target=self._run,
@@ -109,6 +113,10 @@ class GenerationWorker:
       token_queue.put(None)
 
   def _submit_phrase(self, text: str) -> None:
+    if self._phrase_filter is not None and not self._phrase_filter(text):
+      self.suppressed_phrases += 1
+      logger.info("Suppressed TTS phrase (vision dump): %r", text[:80])
+      return
     self._phrase_playback.submit(text)
 
   def _run(
