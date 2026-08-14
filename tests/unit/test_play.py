@@ -1,4 +1,4 @@
-from puppet.play.actions import parse_robot_actions, strip_robot_actions
+from puppet.play.actions import parse_robot_actions, strip_robot_actions, user_asked_to_stop
 from puppet.play.phrases import play_phrase
 from puppet.play.policy import PlayConfig, PlayMemory, plan_follow, plan_seek
 
@@ -48,6 +48,15 @@ def test_llm_look_and_stop_tags() -> None:
   assert "looking" in spoken.lower()
   assert "ACTION" not in spoken
   assert "<<" not in spoken
+
+
+def test_user_asked_to_stop() -> None:
+  assert user_asked_to_stop("Stop, stop, stop.")
+  assert user_asked_to_stop("Stop.")
+  assert user_asked_to_stop("Bitte bleib stehen")
+  assert user_asked_to_stop("Arrête !")
+  assert not user_asked_to_stop("Follow me")
+  assert not user_asked_to_stop("What is a stopwatch?")
 
 
 def test_strip_robot_actions_leaves_chat() -> None:
@@ -149,15 +158,17 @@ def test_seek_gives_up_when_lost_too_long() -> None:
   assert nudge.reason == "giveup"
 
 
-def test_lost_turns_toward_voice() -> None:
-  scene = {"closest_m": 1.5, "sectors": {"left": 1.5, "center": 1.5, "right": 1.5}, "objects": []}
-  nudge = plan_follow(scene, PlayMemory(), PlayConfig(), heading_error_deg=90)
-  assert nudge.cmd == "turn_right"
-  assert nudge.reason == "turn_to_voice"
-
-
-def test_lost_approaches_when_facing_voice() -> None:
-  scene = {"closest_m": 1.5, "sectors": {"left": 1.5, "center": 1.5, "right": 1.5}, "objects": []}
-  nudge = plan_follow(scene, PlayMemory(), PlayConfig(), heading_error_deg=5)
-  assert nudge.cmd == "forward"
-  assert nudge.reason == "approach_voice"
+def test_follow_lost_waits_instead_of_hunting() -> None:
+  scene = {
+    "closest_m": 1.5,
+    "sectors": {"left": 1.5, "center": 1.5, "right": 1.5},
+    "objects": [],
+  }
+  mem = PlayMemory()
+  cfg = PlayConfig()
+  with_heading = plan_follow(scene, mem, cfg, heading_error_deg=90)
+  assert with_heading.cmd == "idle"
+  assert with_heading.reason == "lost"
+  facing = plan_follow(scene, PlayMemory(), cfg, heading_error_deg=5)
+  assert facing.cmd == "idle"
+  assert facing.reason == "lost"

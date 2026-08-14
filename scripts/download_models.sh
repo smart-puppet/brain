@@ -43,7 +43,7 @@ download_if_missing "$VAD_PATH" "$VAD_URL"
 download_if_missing "$STT_PATH" "$STT_URL"
 download_if_missing "$LLM_PATH" "$LLM_URL"
 
-# Piper voices for en / fr / de (see config/language.yaml)
+# Piper voices for en / fr / de (see config/language/*.yaml)
 download_tts_voice "en/en_US/ryan/medium/en_US-ryan-medium"
 download_tts_voice "fr/fr_FR/siwis/medium/fr_FR-siwis-medium"
 download_tts_voice "de/de_DE/thorsten/medium/de_DE-thorsten-medium"

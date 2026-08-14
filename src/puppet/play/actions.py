@@ -55,3 +55,19 @@ def parse_robot_actions(text: str) -> tuple[str, list[str]]:
 def strip_robot_actions(text: str) -> str:
   spoken, _ = parse_robot_actions(text)
   return spoken
+
+
+# Voice stop while already rolling — not used to *start* play.
+_STOP_USER_RE = re.compile(
+  r"(?iu)(?<!\w)("
+  r"stop+|halt+|freeze|"
+  r"stopp+|bleib(?:\s+bitte)?\s+stehen|stehen\s+bleiben|"
+  r"h[oö]r\s+auf|"
+  r"arr[eê]te(?:z|s)?|reste\s+(?:ici|l[aà])"
+  r")(?!\w)"
+)
+
+
+def user_asked_to_stop(text: str) -> bool:
+  """True when the child clearly asked to stay still (any of en/fr/de)."""
+  return bool(text and _STOP_USER_RE.search(text.strip()))

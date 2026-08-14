@@ -1,4 +1,4 @@
-# Speech-to-text (Nemotron via parakeet.cpp). Language from language.yaml profile.
+# Speech-to-text (Nemotron via parakeet.cpp). Language from config/language/<locale>.yaml.
 
 stt:
   backend: parakeet

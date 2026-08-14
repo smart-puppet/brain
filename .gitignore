@@ -18,3 +18,7 @@ vendor/llama-cpp-python/
 models/*
 !models/.gitkeep
 !models/README.md
+config/language.active
+config/language.active.tmp
+# Local language overlays next to config (../brain from config/); not committed
+/brain/*.yaml

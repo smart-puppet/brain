@@ -21,12 +21,12 @@ def test_resolve_ggml_type_unknown() -> None:
 
 def test_llm_warmup_runs_minimal_completion() -> None:
   llm = LlamaLlm.__new__(LlamaLlm)
-  llm._system_prompt = "You are Elmo."
+  llm._system_prompt = "You are Kace."
   llm._llm = MagicMock()
   llm.warmup(max_tokens=1, prompt="Hi", stream=False)
   llm._llm.create_chat_completion.assert_called_once_with(
     messages=[
-      {"role": "system", "content": "You are Elmo."},
+      {"role": "system", "content": "You are Kace."},
       {"role": "user", "content": "Hi"},
     ],
     stream=False,

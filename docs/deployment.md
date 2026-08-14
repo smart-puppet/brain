@@ -214,13 +214,13 @@ Default targets:
 
 ### Language
 
-Edit `config/language.yaml` to set `language.active` (`en`, `fr`, or `de`). Each profile configures:
+Brain reads `config/language.active` at **startup only** (`en`, `fr`, or `de`). The eyes debug web writes that file. If it is missing, the robot starts in **German**. `puppet --language fr` still overrides for that process.
+
+Each profile in `config/language/` (`en.yaml`, `fr.yaml`, `de.yaml`) configures:
 
 - STT locale (`stt_language` → parakeet `stream_begin_lang`)
 - Piper TTS model paths
 - LLM system prompt (reply language)
-
-Override at runtime:
 
 ```bash
 puppet --language fr

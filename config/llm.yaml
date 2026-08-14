@@ -1,4 +1,4 @@
-# LLM (llama-cpp-python). System prompt from language.yaml profile.
+# LLM (llama-cpp-python). System prompt from config/language/<locale>.yaml.
 #
 # WARNING: only one llama binding can be installed in .venv at a time.
 # build_llama.sh and build_llama_prism.sh overwrite each other — see docs/deployment.md.

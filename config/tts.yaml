@@ -1,4 +1,4 @@
-# Text-to-speech (Piper). Voice model from language.yaml profile.
+# Text-to-speech (Piper). Voice model from config/language/<locale>.yaml.
 
 tts:
   backend: piper

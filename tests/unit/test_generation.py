@@ -25,14 +25,14 @@ def _worker(**kwargs: object) -> GenerationWorker:
 
 def test_phrase_waits_for_sentence_end_not_comma() -> None:
   worker = _worker()
-  assert not worker._phrase_ready("Elmo est joyeux,", first=False)
-  assert worker._phrase_ready("Elmo est joyeux.", first=False)
+  assert not worker._phrase_ready("Kace est joyeux,", first=False)
+  assert worker._phrase_ready("Kace est joyeux.", first=False)
 
 
 def test_first_phrase_timeout_when_configured() -> None:
   worker = _worker(first_phrase_max_wait_ms=300)
-  assert not worker._first_phrase_ready("Elmo", first_token_at=0.0)
-  assert worker._first_phrase_ready("Elmo est", first_token_at=time.monotonic() - 0.35)
+  assert not worker._first_phrase_ready("Kace", first_token_at=0.0)
+  assert worker._first_phrase_ready("Kace est", first_token_at=time.monotonic() - 0.35)
 
 
 class SlowChunkTts:

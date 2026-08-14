@@ -45,7 +45,7 @@ def main(argv: list[str] | None = None) -> int:
     "--language",
     "-l",
     choices=["en", "fr", "de"],
-    help="Language profile (overrides config/language.yaml)",
+    help="Language profile (overrides config/language.active)",
   )
   parser.add_argument(
     "--once",
@@ -65,6 +65,10 @@ def main(argv: list[str] | None = None) -> int:
     config.setdefault("puppet", {}).setdefault("mouth", {})["debug"] = True
   _configure_logging(config)
   configure_mouth_logging(config)
+  logging.getLogger(__name__).info(
+    "Language %s (restart brain to apply a change from eyes debug web)",
+    (config.get("language") or {}).get("active"),
+  )
   _install_shutdown_signals()
 
   orchestrator = Orchestrator(config)

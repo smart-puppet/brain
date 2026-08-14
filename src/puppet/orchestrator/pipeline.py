@@ -874,8 +874,19 @@ class Orchestrator:
     self._speaking_since = 0.0
     self._playback_started_at = 0.0
 
-    # Face the speaker from ReSpeaker DoA (rule-based — no LLM).
-    self._maybe_face_speaker()
+    # Stop is safety: idle immediately if already rolling. Do not wait for <<stop>>
+    # or turn toward the voice first.
+    from puppet.play.actions import user_asked_to_stop
+
+    if (
+      self._play is not None
+      and self._play.mode in ("follow", "seek")
+      and user_asked_to_stop(prompt)
+    ):
+      logger.info("Play → idle (user asked to stop)")
+      self._play.set_mode("idle")
+    else:
+      self._maybe_face_speaker()
     # Cached CameraJSON + body status only. Never block this audio thread on eyes.
     self._prepare_llm_scene_cache()
 
@@ -889,8 +900,8 @@ class Orchestrator:
   def _body_status_line(self) -> str:
     mode = self._play.mode if self._play is not None else "idle"
     labels = {
-      "follow": "following the child (wheels may roll)",
-      "seek": "playing hide-and-seek (searching)",
+      "follow": "following the child (wheels may roll). If they ask to stop, you MUST add <<stop>>",
+      "seek": "playing hide-and-seek (searching). If they ask to stop, you MUST add <<stop>>",
       "idle": "standing still",
     }
     motion = "on" if (self._play is not None and self._play.allow_motion) else "off"
@@ -1016,8 +1027,12 @@ class Orchestrator:
     return True
 
   def _play_heading_error(self) -> float | None:
-    """Signed DoA error for play (positive = speaker to the robot's right)."""
-    az = self._respeaker_doa.last_azimuth
+    """Signed DoA error for play (positive = speaker to the robot's right).
+
+    Only the *current* utterance latch — last_azimuth is frozen after speech
+    ends, and chasing it makes follow/seek spin in place.
+    """
+    az = self._respeaker_doa.peek_utterance_azimuth()
     if az is None or self._drive is None:
       return None
     from puppet.core.audio.respeaker import signed_heading_error_deg

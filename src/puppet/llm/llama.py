@@ -192,7 +192,7 @@ class LlamaLlm(LlmBackend):
       return base
     vision_block = (
       "Private robot state. Never copy or read it aloud. "
-      "Never output CameraJSON, SEEING, PATH, RANGES, Vision, meter readings, or action tags. "
+      "Never output CameraJSON, SEEING, PATH, RANGES, Vision, or meter readings. "
       "Object names in CameraJSON are always English (YOLO labels). "
       "When you speak, translate every object name into the child's spoken language "
       "(e.g. French: bed→lit, chair→chaise, plant→plante; German: bed→Bett). "
@@ -201,7 +201,8 @@ class LlamaLlm(LlmBackend):
       "and add <<look>> as a hidden last line. "
       "To roll after you speak, add one hidden last line: <<follow>> or <<seek>> or <<stop>> or <<back>>. "
       "<<seek>> means you look for the child; you cannot hide. "
-      "If BodyStatus already says searching, do not add <<seek>> again; add <<stop>> if they ask if you are hidden. "
+      "If BodyStatus already says following or searching, do not add <<follow>> or <<seek>> again. "
+      "If they ask to stop, stay, or stand still, you MUST add <<stop>>. "
       "No tag for stories or normal chat. Never say the tags out loud.\n"
       f"{line}"
     )

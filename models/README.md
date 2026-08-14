@@ -6,7 +6,7 @@ Download all required models automatically:
 ./scripts/download_models.sh
 ```
 
-Expected paths (see `config/language.yaml` for per-language TTS):
+Expected paths (see `config/language/*.yaml` for per-language TTS):
 
 | Path | Description |
 |------|-------------|

@@ -165,35 +165,10 @@ def _plan_lost(
   *,
   heading_error_deg: Optional[float],
 ) -> DriveNudge:
-  """No YOLO person: turn toward last voice DoA, or creep forward if facing them."""
+  """No YOLO person: wait in place. Do not hunt last-voice DoA (it does not
+  update while the child is quiet, so chasing it spins forever)."""
+  del scene, cfg, heading_error_deg
   mem.lost_ticks += 1
-  sectors = scene.get("sectors") if isinstance(scene.get("sectors"), dict) else {}
-  closest_m = _finite_m(scene.get("closest_m"))
-  center_m = _finite_m(sectors.get("center"))
-  if heading_error_deg is not None and abs(heading_error_deg) >= cfg.doa_deadband_deg:
-    cmd = "turn_right" if heading_error_deg > 0 else "turn_left"
-    span = min(abs(heading_error_deg), 90.0) / 90.0
-    dur = max(250, int(cfg.search_turn_dur_ms * span))
-    return DriveNudge(cmd, speed=cfg.turn_speed, dur_ms=dur, reason="turn_to_voice")
-  blocked = _blocked_ahead_of_person(
-    person_m=None, closest_m=closest_m, center_m=center_m, cfg=cfg
-  )
-  facing = heading_error_deg is not None and abs(heading_error_deg) < cfg.doa_deadband_deg
-  if facing and not blocked and (closest_m is None or closest_m > cfg.follow_stop_m):
-    return DriveNudge(
-      "forward",
-      speed=cfg.forward_speed,
-      dur_ms=cfg.forward_dur_ms,
-      reason="approach_voice",
-    )
-  if mem.lost_ticks >= cfg.lost_ticks_max and heading_error_deg is None:
-    mem.search_dir = "turn_right" if mem.search_dir == "turn_left" else "turn_left"
-    return DriveNudge(
-      mem.search_dir,
-      speed=cfg.turn_speed,
-      dur_ms=cfg.search_turn_dur_ms,
-      reason="search",
-    )
   return DriveNudge("idle", reason="lost")
 
 

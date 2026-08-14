@@ -32,6 +32,90 @@ def test_env_override(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   assert cfg["stt"]["model_path"] == "b.gguf"
 
 
+def test_local_brain_overlay_replaces_locale(tmp_path: Path) -> None:
+  config_dir = tmp_path / "config"
+  lang_dir = config_dir / "language"
+  overlay = tmp_path / "brain"
+  lang_dir.mkdir(parents=True)
+  overlay.mkdir()
+  (lang_dir / "en.yaml").write_text(
+    "label: English\nstt_language: en-US\nsystem_prompt: Hello\n"
+  )
+  (lang_dir / "de.yaml").write_text(
+    "label: Stock\nstt_language: de-DE\nsystem_prompt: Kace\n"
+  )
+  (overlay / "de.yaml").write_text(
+    "de:\n  label: Deutsch\n  stt_language: de-DE\n  system_prompt: Overlay\n"
+  )
+  cfg = load_config(config_dir)
+  assert cfg["language"]["active"] == "de"
+  assert cfg["llm"]["system_prompt"] == "Overlay"
+  assert cfg["language"]["profiles"]["en"]["system_prompt"] == "Hello"
+
+
+def test_missing_local_brain_de_falls_back_to_config(tmp_path: Path) -> None:
+  config_dir = tmp_path / "config"
+  lang_dir = config_dir / "language"
+  lang_dir.mkdir(parents=True)
+  (lang_dir / "de.yaml").write_text(
+    "label: Deutsch\nstt_language: de-DE\nsystem_prompt: Kace\n"
+  )
+  cfg = load_config(config_dir)
+  assert cfg["llm"]["system_prompt"] == "Kace"
+
+
+def test_language_dir_profiles_load(tmp_path: Path) -> None:
+  lang_dir = tmp_path / "language"
+  lang_dir.mkdir()
+  (lang_dir / "en.yaml").write_text(
+    "label: English\nstt_language: en-US\nsystem_prompt: Hello\n"
+  )
+  (lang_dir / "de.yaml").write_text(
+    "label: Deutsch\nstt_language: de\nsystem_prompt: Hallo\n"
+  )
+  cfg = load_config(tmp_path)
+  assert cfg["language"]["active"] == "de"
+  assert cfg["stt"]["language"] == "de"
+  assert cfg["llm"]["system_prompt"] == "Hallo"
+
+
+def test_language_active_file_overrides_yaml(tmp_path: Path) -> None:
+  (tmp_path / "language.yaml").write_text(
+    "language:\n  active: en\n  profiles:\n"
+    "    en:\n      stt_language: en-US\n"
+    "    de:\n      stt_language: de\n"
+    "    fr:\n      stt_language: fr\n"
+  )
+  (tmp_path / "language.active").write_text("fr\n")
+  cfg = load_config(tmp_path)
+  assert cfg["language"]["active"] == "fr"
+  assert cfg["stt"]["language"] == "fr"
+
+
+def test_missing_language_active_defaults_to_german(tmp_path: Path) -> None:
+  (tmp_path / "language.yaml").write_text(
+    "language:\n  active: en\n  profiles:\n"
+    "    en:\n      stt_language: en-US\n"
+    "    de:\n      stt_language: de\n"
+  )
+  cfg = load_config(tmp_path)
+  assert cfg["language"]["active"] == "de"
+  assert cfg["stt"]["language"] == "de"
+
+
+def test_cli_language_beats_active_file(tmp_path: Path) -> None:
+  (tmp_path / "language.yaml").write_text(
+    "language:\n  active: en\n  profiles:\n"
+    "    en:\n      stt_language: en-US\n      system_prompt: English\n"
+    "    fr:\n      stt_language: fr\n      system_prompt: Français\n"
+    "    de:\n      stt_language: de\n"
+  )
+  (tmp_path / "language.active").write_text("de\n")
+  cfg = load_config(tmp_path, language="fr")
+  assert cfg["language"]["active"] == "fr"
+  assert cfg["stt"]["language"] == "fr"
+
+
 def test_language_profile_cli_override(tmp_path: Path) -> None:
   (tmp_path / "language.yaml").write_text(
     "language:\n  active: en\n  profiles:\n"
