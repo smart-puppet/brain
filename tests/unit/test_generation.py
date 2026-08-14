@@ -51,6 +51,14 @@ class SlowChunkTts:
     self._stopped = True
 
 
+def test_defer_tts_does_not_submit() -> None:
+  playback = MagicMock()
+  worker = _worker(phrase_playback=playback, defer_tts=lambda: True)
+  worker._submit_phrase("Je vois un lit a gauche.")
+  playback.submit.assert_not_called()
+  assert worker.suppressed_phrases == 0
+
+
 def test_phrase_clean_strips_robot_tags() -> None:
   from puppet.play.actions import strip_robot_actions
 

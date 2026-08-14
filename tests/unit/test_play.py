@@ -17,6 +17,15 @@ def test_llm_back_tag() -> None:
   assert "<<" not in spoken
 
 
+def test_looks_like_vision_question() -> None:
+  from puppet.mqtt.scene import looks_like_vision_question
+
+  assert looks_like_vision_question("que vois-tu?")
+  assert looks_like_vision_question("What do you see?")
+  assert looks_like_vision_question("Was siehst du?")
+  assert not looks_like_vision_question("Follow me")
+
+
 def test_glimpse_not_forced_on_reverse() -> None:
   from puppet.mqtt.scene import should_force_object_glimpse
 

@@ -28,6 +28,7 @@ class GenerationWorker:
     phrase_playback: PhrasePlayback,
     phrase_filter: Callable[[str], bool] | None = None,
     phrase_clean: Callable[[str], str] | None = None,
+    defer_tts: Callable[[], bool] | None = None,
   ) -> None:
     self._llm = llm
     self._phrase_delimiters = phrase_delimiters
@@ -37,6 +38,7 @@ class GenerationWorker:
     self._phrase_playback = phrase_playback
     self._phrase_filter = phrase_filter
     self._phrase_clean = phrase_clean
+    self._defer_tts = defer_tts
     self._lock = threading.Lock()
     self._cancel = threading.Event()
     self._epoch = 0
@@ -119,6 +121,8 @@ class GenerationWorker:
       text = self._phrase_clean(text)
     if not (text or "").strip():
       return
+    if self._defer_tts is not None and self._defer_tts():
+      return
     if self._phrase_filter is not None and not self._phrase_filter(text):
       self.suppressed_phrases += 1
       logger.info("Suppressed TTS phrase (vision dump): %r", text[:80])
@@ -189,7 +193,7 @@ class GenerationWorker:
       producer.join(timeout=2.0)
       if self._cancel.is_set() or epoch != self._epoch:
         self._phrase_playback.stop()
-      else:
+      elif self._defer_tts is None or not self._defer_tts():
         self._phrase_playback.wait_done()
       if not self._cancel.is_set() and epoch == self._epoch and on_done:
         on_done("".join(full_reply).strip(), epoch)

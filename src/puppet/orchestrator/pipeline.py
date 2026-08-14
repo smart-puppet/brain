@@ -333,12 +333,14 @@ class Orchestrator:
     )
     self._vision_lang = str((config.get("language") or {}).get("active") or "en")
     self._block_vision_tts = False
+    self._defer_vision_tts = False
+    self._vision_fresh_this_turn = False
     from puppet.play.actions import strip_robot_actions
 
     if hasattr(self.llm, "set_vision_hint_fn"):
       self.llm.set_vision_hint_fn(self._llm_body_context)
-    if hasattr(self.llm, "set_vision_refresh_fn") and self._capture_every_reply:
-      self.llm.set_vision_refresh_fn(self._refresh_vision_before_llm)
+    if hasattr(self.llm, "set_vision_refresh_fn"):
+      self.llm.set_vision_refresh_fn(self._maybe_refresh_vision_before_llm)
     self._worker = GenerationWorker(
       self.llm,
       phrase_delimiters=self._phrase_delimiters,
@@ -348,6 +350,7 @@ class Orchestrator:
       phrase_playback=self._tts_pipeline,
       phrase_filter=self._allow_tts_phrase,
       phrase_clean=strip_robot_actions,
+      defer_tts=lambda: self._defer_vision_tts,
     )
 
   @staticmethod
@@ -865,9 +868,11 @@ class Orchestrator:
     self._spoken_reply_corpus = ""
     self._current_reply_text = ""
     self._block_vision_tts = False
+    prompt = self.conversation.draft_user.strip()
+    self._defer_vision_tts = self._looks_like_vision_question(prompt)
+    self._vision_fresh_this_turn = False
     self._reply_in_progress = True
     self._suspend_stt_for_llm()
-    prompt = self.conversation.draft_user.strip()
     self._trace.llm_prompt(prompt)
     self._latency.mark_generation_start()
     self._set_state(PipelineState.THINKING)
@@ -887,8 +892,11 @@ class Orchestrator:
       self._play.set_mode("idle")
     else:
       self._maybe_face_speaker()
-    # Cached CameraJSON + body status only. Never block this audio thread on eyes.
-    self._prepare_llm_scene_cache()
+    if self._defer_vision_tts:
+      logger.info("Vision question — capture before reply, hold TTS until look/glimpse")
+    else:
+      # Cached CameraJSON + body status only. Never block this audio thread on eyes.
+      self._prepare_llm_scene_cache()
 
     epoch = self._worker.start(
       self.conversation,
@@ -937,15 +945,24 @@ class Orchestrator:
       float(result.get("_age_s") or 0.0),
     )
 
+  def _maybe_refresh_vision_before_llm(self) -> None:
+    """Capture on the LLM thread for 'what do you see' (or every reply if configured)."""
+    if self._capture_every_reply or self._defer_vision_tts:
+      self._refresh_vision_before_llm()
+
   def _refresh_vision_before_llm(self) -> None:
-    """Optional always-capture, runs on the generation thread."""
+    """Fresh capture on the generation thread, then inject CameraJSON."""
     ingest = self._scene_ingest or self._play_scene
     if ingest is None:
       return
+    for item in (self._scene_ingest, self._play_scene):
+      if item is not None:
+        item.set_inject_context(False)
     result = ingest.request_capture(timeout_s=min(float(ingest.capture_timeout_s), 8.0))
     if result.get("ok"):
       ingest.apply_scene(result, age_s=0.0)
       ingest.set_inject_context(True)
+      self._vision_fresh_this_turn = True
       logger.info(
         "Vision refresh objects=%s hint=%r",
         len(result.get("objects") or []),
@@ -1167,11 +1184,15 @@ class Orchestrator:
     elif motion is not None:
       self._apply_llm_play_mode(motion)
     looked = False
+    ingest = self._scene_ingest or self._play_scene
     if "look" in actions:
-      looked = self._look_capture_after_reply()
+      if self._defer_vision_tts and self._vision_fresh_this_turn:
+        looked = True
+        logger.info("LLM <<look>> skipped; already captured before this reply")
+      else:
+        looked = self._look_capture_after_reply()
 
     replaced = False
-    ingest = self._scene_ingest or self._play_scene
     user_draft = self.conversation.draft_user
     need_glimpse = False
     if ingest is not None:
@@ -1203,6 +1224,11 @@ class Orchestrator:
       replaced = True
       self._tts_pipeline.submit(spoken)
       self._tts_pipeline.wait_done()
+    elif self._defer_vision_tts and (spoken or "").strip():
+      logger.info("Speaking held vision reply")
+      self._tts_pipeline.submit(spoken)
+      self._tts_pipeline.wait_done()
+    self._defer_vision_tts = False
 
     for item in (self._scene_ingest, self._play_scene):
       if item is not None:
