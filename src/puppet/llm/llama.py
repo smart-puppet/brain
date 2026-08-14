@@ -185,12 +185,16 @@ class LlamaLlm(LlmBackend):
     if not line:
       return base
     vision_block = (
-      "Secret camera data follows. Never copy, quote, or read it aloud. "
-      "Never output CameraJSON, SEEING, PATH, RANGES, Vision, or meter readings. "
+      "Private robot state. Never copy or read it aloud. "
+      "Never output CameraJSON, SEEING, PATH, RANGES, Vision, meter readings, or action tags. "
       "Object names in CameraJSON are always English (YOLO labels). "
       "When you speak, translate every object name into the child's spoken language "
       "(e.g. French: bed→lit, chair→chaise, plant→plante; German: bed→Bett). "
-      "If objects is non-empty, answer what you see in your own short kid words only.\n"
+      "If objects is non-empty and they asked what you see, answer in your own short kid words. "
+      "If they asked what you see and objects is empty or stale_s is large, say you are looking "
+      "and add <<look>> as a hidden last line. "
+      "To roll after you speak, add one hidden last line: <<follow>> or <<seek>> or <<stop>> or <<back>>. "
+      "No tag for stories or normal chat. Never say the tags out loud.\n"
       f"{line}"
     )
     if base:

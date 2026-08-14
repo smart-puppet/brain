@@ -197,6 +197,49 @@ def looks_like_vision_dump(text: str) -> bool:
   return False
 
 
+_VISION_QUESTION_RE = re.compile(
+  r"(?i)(?:what\s+(?:do\s+you|can\s+you)?\s*see|do\s+you\s+see|"
+  r"look\s+around|what.?s\s+(?:in\s+front|there)|"
+  r"que\s+(?:vois|voyais)|tu\s+vois|vous\s+voyez|"
+  r"qu.?est[- ]ce\s+que\s+tu\s+vois|regarde|"
+  r"was\s+siehst|schau\s+mal)"
+)
+
+
+def looks_like_vision_question(text: str) -> bool:
+  """True when the child asked what is in front of the camera."""
+  return bool(_VISION_QUESTION_RE.search(text or ""))
+
+
+def should_force_object_glimpse(
+  *,
+  looked: bool,
+  inject_context: bool,
+  has_objects: bool,
+  mentions_objects: bool,
+  vision_dump: bool,
+  suppressed_phrases: bool,
+  vision_question: bool,
+  motion: bool,
+) -> bool:
+  """Replace a reply with a spoken object list only for look / see turns.
+
+  Motion replies (reverse, follow) must not be overwritten just because
+  CameraJSON was injected and the model did not name YOLO labels.
+  """
+  if motion:
+    return False
+  if looked and not mentions_objects:
+    return True
+  if not inject_context:
+    return False
+  if vision_dump or suppressed_phrases:
+    return True
+  if has_objects and not mentions_objects and vision_question:
+    return True
+  return False
+
+
 class SceneIngest:
   """Caches eyes traversability scenes and can request a fresh capture."""
 
@@ -210,6 +253,7 @@ class SceneIngest:
     min_interval_s: float = 1.0,
     capture_timeout_s: float = 60.0,
     capture_view: str = "traverse",
+    name: str = "vision",
   ) -> None:
     self.broker = broker
     self.port = port
@@ -218,6 +262,7 @@ class SceneIngest:
     self.min_interval_s = min_interval_s
     self.capture_timeout_s = capture_timeout_s
     self.capture_view = capture_view if capture_view in ("boxes", "traverse") else "traverse"
+    self.name = (name or "vision").strip() or "vision"
     self._lock = threading.Lock()
     self._hint = ""
     self._objects: list[dict[str, Any]] = []
@@ -237,7 +282,7 @@ class SceneIngest:
       return
     client = mqtt.Client(
       mqtt.CallbackAPIVersion.VERSION2,
-      client_id=f"puppet_scene_{os.getpid()}",
+      client_id=f"puppet_scene_{self.name}_{os.getpid()}",
     )
     client.on_connect = self._on_connect
     client.on_message = self._on_message
@@ -246,7 +291,8 @@ class SceneIngest:
       client.loop_start()
       self._client = client
       logger.info(
-        "Vision MQTT subscribed to %s @ %s:%s (capture=%s)",
+        "Vision MQTT [%s] subscribed to %s @ %s:%s (capture=%s)",
+        self.name,
         self.topic,
         self.broker,
         self.port,
@@ -290,6 +336,27 @@ class SceneIngest:
       self._ts = now
     self._scene_event.set()
 
+  def apply_scene(self, scene: dict[str, Any], *, age_s: float = 0.0) -> None:
+    """Update the cache from a scene dict (e.g. copied from the play ingest)."""
+    now = time.time() - max(0.0, float(age_s))
+    objs = scene.get("objects") or []
+    with self._lock:
+      self._scene = dict(scene)
+      self._hint = str(scene.get("hint") or "")
+      if isinstance(objs, list):
+        self._objects = objs[:8]
+      self._ts = now
+
+  def latest_scene(self) -> dict[str, Any]:
+    with self._lock:
+      return dict(self._scene)
+
+  def scene_age_s(self) -> float:
+    with self._lock:
+      if self._ts <= 0:
+        return 9999.0
+      return time.time() - self._ts
+
   def request_capture(
     self,
     *,
@@ -305,6 +372,7 @@ class SceneIngest:
     timeout = float(timeout_s if timeout_s is not None else self.capture_timeout_s)
     req_id = uuid.uuid4().hex
     body = {"req_id": req_id, "view": use_view, "timeout_s": timeout}
+    self._scene_event.clear()
     try:
       self._client.publish(self.capture_topic, json.dumps(body), qos=1)
     except Exception as exc:  # noqa: BLE001
@@ -319,8 +387,8 @@ class SceneIngest:
       remaining = deadline - time.time()
       if remaining <= 0:
         break
-      self._scene_event.clear()
       self._scene_event.wait(timeout=min(0.25, remaining))
+      self._scene_event.clear()
 
     with self._lock:
       scene = dict(self._scene)

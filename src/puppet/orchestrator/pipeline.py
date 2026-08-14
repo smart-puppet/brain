@@ -70,7 +70,22 @@ class Orchestrator:
     self._vad = vad or create_vad(config)
 
     self._scene_ingest = None
+    self._log_pub = None
     mqtt_cfg = config.get("mqtt", {}) or {}
+    if mqtt_cfg:
+      try:
+        from puppet.mqtt.logpub import MqttLogPublisher
+
+        self._log_pub = MqttLogPublisher(
+          broker=str(mqtt_cfg.get("broker", "127.0.0.1")),
+          port=int(mqtt_cfg.get("port", 1883)),
+          topic=str(mqtt_cfg.get("log_topic", "robot/log/brain")),
+          source="brain",
+        )
+        self._log_pub.start()
+      except Exception as exc:  # noqa: BLE001
+        logger.warning("MQTT log publisher disabled: %s", exc)
+        self._log_pub = None
     if bool(mqtt_cfg.get("vision_enabled", False)):
       try:
         from puppet.mqtt.scene import SceneIngest
@@ -83,20 +98,24 @@ class Orchestrator:
           min_interval_s=float(mqtt_cfg.get("vision_min_interval_s", 1.0)),
           capture_timeout_s=float(mqtt_cfg.get("capture_timeout_s", 60.0)),
           capture_view=str(mqtt_cfg.get("capture_view", "traverse")),
+          name="vision",
         )
         self._scene_ingest.start()
-        if hasattr(self.llm, "set_vision_hint_fn"):
-          self.llm.set_vision_hint_fn(self._scene_ingest.context_line)
-        # Captures are gated on the user prompt (needs_vision_capture), not every reply.
-        # capture_before_reply=true is kept as a legacy "always capture" override.
+        # capture_before_reply=true captures on the LLM thread before every reply.
+        # Otherwise the model uses a cached scene and may emit <<look>> for a fresh one.
         self._capture_every_reply = bool(mqtt_cfg.get("capture_before_reply", False))
       except Exception as exc:  # noqa: BLE001
         logger.warning("Vision MQTT ingest disabled: %s", exc)
 
-    from puppet.mqtt.scene import looks_like_vision_dump, needs_vision_capture
+    from puppet.mqtt.scene import (
+      looks_like_vision_dump,
+      looks_like_vision_question,
+      should_force_object_glimpse,
+    )
 
     self._looks_like_vision_dump = looks_like_vision_dump
-    self._needs_vision_capture = needs_vision_capture
+    self._looks_like_vision_question = looks_like_vision_question
+    self._should_force_object_glimpse = should_force_object_glimpse
     if not hasattr(self, "_capture_every_reply"):
       self._capture_every_reply = False
 
@@ -216,6 +235,7 @@ class Orchestrator:
           broker=str(mqtt_cfg.get("broker", "127.0.0.1")),
           port=int(mqtt_cfg.get("port", 1883)),
           cmd_topic=str(mqtt_cfg.get("drive_cmd_topic", "robot/drive/cmd")),
+          stop_topic=str(mqtt_cfg.get("drive_stop_topic", "robot/drive/stop")),
           front_deg=float(rs_cfg.get("doa_front_deg", 60)),
           deadband_deg=float(rs_cfg.get("doa_deadband_deg", 25)),
           max_turn_deg=float(rs_cfg.get("doa_max_turn_deg", 120)),
@@ -233,6 +253,72 @@ class Orchestrator:
       except Exception as exc:  # noqa: BLE001
         logger.warning("Face-speaker drive disabled: %s", exc)
         self._drive = None
+
+    self._play = None
+    self._play_scene = None
+    play_cfg = config.get("play", {}) or {}
+    if bool(play_cfg.get("enabled", False)):
+      try:
+        from puppet.mqtt.drive import DriveClient
+        from puppet.mqtt.scene import SceneIngest
+        from puppet.play.policy import PlayConfig
+        from puppet.play.supervisor import PlaySupervisor
+
+        if self._drive is None:
+          self._drive = DriveClient(
+            broker=str(mqtt_cfg.get("broker", "127.0.0.1")),
+            port=int(mqtt_cfg.get("port", 1883)),
+            cmd_topic=str(mqtt_cfg.get("drive_cmd_topic", "robot/drive/cmd")),
+            stop_topic=str(mqtt_cfg.get("drive_stop_topic", "robot/drive/stop")),
+          )
+          self._drive.start()
+        play_scene = SceneIngest(
+          broker=str(mqtt_cfg.get("broker", "127.0.0.1")),
+          port=int(mqtt_cfg.get("port", 1883)),
+          topic=str(mqtt_cfg.get("scene_topic", "robot/nav/scene")),
+          capture_topic=str(mqtt_cfg.get("capture_topic", "robot/nav/capture")),
+          min_interval_s=float(mqtt_cfg.get("vision_min_interval_s", 1.0)),
+          capture_timeout_s=float(play_cfg.get("capture_timeout_s", 8.0)),
+          capture_view="traverse",
+          name="play",
+        )
+        play_scene.start()
+        follow = play_cfg.get("follow", {}) or {}
+        self._play_scene = play_scene
+        self._play = PlaySupervisor(
+          scene=play_scene,
+          drive=self._drive,
+          config=PlayConfig(
+            follow_stop_m=float(follow.get("stop_m", 0.9)),
+            obstacle_m=float(follow.get("obstacle_m", 0.5)),
+            sector_block_m=float(follow.get("sector_block_m", 0.7)),
+            forward_speed=int(follow.get("forward_speed", 90)),
+            forward_dur_ms=int(follow.get("forward_dur_ms", 500)),
+            backward_speed=int(follow.get("backward_speed", follow.get("forward_speed", 90))),
+            backward_dur_ms=int(follow.get("backward_dur_ms", follow.get("forward_dur_ms", 500))),
+            turn_speed=int(follow.get("turn_speed", 110)),
+            turn_dur_ms=int(follow.get("turn_dur_ms", 280)),
+            search_turn_dur_ms=int(follow.get("search_turn_dur_ms", 700)),
+            lost_ticks_max=int(follow.get("lost_ticks", 2)),
+            found_m=float(follow.get("found_m", 1.15)),
+          ),
+          allow_motion=bool(play_cfg.get("allow_motion", False)),
+          tick_s=float(play_cfg.get("tick_s", 0.15)),
+          cmd_topic=str(mqtt_cfg.get("play_cmd_topic", "robot/play/cmd")),
+          status_topic=str(mqtt_cfg.get("play_status_topic", "robot/play/status")),
+          busy_fn=lambda: (
+            self._reply_in_progress or self.state != PipelineState.LISTENING
+          ),
+          heading_fn=self._play_heading_error,
+        )
+        self._play.start()
+        logger.info(
+          "Play enabled (motion=%s) — LLM tags <<follow>>/<<seek>>/<<stop>>/<<back>> or robot/play/cmd",
+          "on" if play_cfg.get("allow_motion") else "off",
+        )
+      except Exception as exc:  # noqa: BLE001
+        logger.warning("Play supervisor disabled: %s", exc)
+        self._play = None
     self._mouth_fallback_flip_ms = int(
       mouth_cfg.get("fallback_flip_ms", mouth_cfg.get("stupid_flip_ms", 200))
     )
@@ -245,6 +331,12 @@ class Orchestrator:
     )
     self._vision_lang = str((config.get("language") or {}).get("active") or "en")
     self._block_vision_tts = False
+    from puppet.play.actions import strip_robot_actions
+
+    if hasattr(self.llm, "set_vision_hint_fn"):
+      self.llm.set_vision_hint_fn(self._llm_body_context)
+    if hasattr(self.llm, "set_vision_refresh_fn") and self._capture_every_reply:
+      self.llm.set_vision_refresh_fn(self._refresh_vision_before_llm)
     self._worker = GenerationWorker(
       self.llm,
       phrase_delimiters=self._phrase_delimiters,
@@ -253,6 +345,7 @@ class Orchestrator:
       first_phrase_max_wait_ms=self._first_phrase_max_wait_ms,
       phrase_playback=self._tts_pipeline,
       phrase_filter=self._allow_tts_phrase,
+      phrase_clean=strip_robot_actions,
     )
 
   @staticmethod
@@ -779,29 +872,10 @@ class Orchestrator:
     self._speaking_since = 0.0
     self._playback_started_at = 0.0
 
-    # Face the speaker using latched DoA, then think/speak (turn runs while LLM works).
+    # Face the speaker from ReSpeaker DoA (rule-based — no LLM).
     self._maybe_face_speaker()
-
-    # Only ask eyes for a fresh scene when the user utterance is about seeing the room.
-    want_vision = self._scene_ingest is not None and (
-      self._capture_every_reply or self._needs_vision_capture(prompt)
-    )
-    if self._scene_ingest is not None:
-      self._scene_ingest.set_inject_context(False)
-
-    if want_vision:
-      if self._try_vision_glimpse_reply(prompt):
-        return
-      result = self._scene_ingest.request_capture()
-      if result.get("ok"):
-        self._scene_ingest.set_inject_context(True)
-        logger.info(
-          "Vision capture for prompt objects=%s hint=%r",
-          len(result.get("objects") or []),
-          result.get("hint"),
-        )
-      else:
-        logger.warning("Vision capture failed: %s", result.get("error"))
+    # Cached CameraJSON + body status only. Never block this audio thread on eyes.
+    self._prepare_llm_scene_cache()
 
     epoch = self._worker.start(
       self.conversation,
@@ -809,6 +883,115 @@ class Orchestrator:
       on_done=self._on_generation_done,
     )
     self.bus.emit("generation_started", draft=self.conversation.draft_user, epoch=epoch)
+
+  def _body_status_line(self) -> str:
+    mode = self._play.mode if self._play is not None else "idle"
+    labels = {
+      "follow": "following the child (wheels may roll)",
+      "seek": "playing hide-and-seek (searching)",
+      "idle": "standing still",
+    }
+    motion = "on" if (self._play is not None and self._play.allow_motion) else "off"
+    return f"BodyStatus: {labels.get(mode, 'standing still')}. Motion={motion}."
+
+  def _llm_body_context(self) -> str:
+    """Private system-prompt lines: wheel state + optional cached CameraJSON."""
+    parts = [self._body_status_line()]
+    for ingest in (self._scene_ingest, self._play_scene):
+      if ingest is None or not ingest.inject_context:
+        continue
+      line = ingest.context_line()
+      if line:
+        parts.append(line)
+        break
+    return "\n".join(parts)
+
+  def _prepare_llm_scene_cache(self) -> None:
+    """Inject the newest cached scene without waiting on a capture."""
+    for ingest in (self._scene_ingest, self._play_scene):
+      if ingest is not None:
+        ingest.set_inject_context(False)
+    result = self._scene_for_reply(max_age_s=8.0, capture_timeout_s=0.0)
+    target = self._scene_ingest or self._play_scene
+    if not result.get("ok") or target is None:
+      return
+    target.apply_scene(result, age_s=float(result.get("_age_s") or 0.0))
+    target.set_inject_context(True)
+    logger.info(
+      "Vision cache objects=%s hint=%r age=%.1fs",
+      len(result.get("objects") or []),
+      result.get("hint"),
+      float(result.get("_age_s") or 0.0),
+    )
+
+  def _refresh_vision_before_llm(self) -> None:
+    """Optional always-capture, runs on the generation thread."""
+    ingest = self._scene_ingest or self._play_scene
+    if ingest is None:
+      return
+    result = ingest.request_capture(timeout_s=min(float(ingest.capture_timeout_s), 8.0))
+    if result.get("ok"):
+      ingest.apply_scene(result, age_s=0.0)
+      ingest.set_inject_context(True)
+      logger.info(
+        "Vision refresh objects=%s hint=%r",
+        len(result.get("objects") or []),
+        result.get("hint"),
+      )
+    else:
+      logger.warning("Vision refresh failed: %s", result.get("error"))
+
+  def _apply_llm_play_mode(self, mode: str) -> None:
+    if self._play is None:
+      logger.warning("LLM asked for %s but play supervisor is off", mode)
+      return
+    self._play.set_mode(mode)
+
+  def _apply_llm_backup(self) -> None:
+    """One-shot reverse after the child asked to back up."""
+    if self._play is not None:
+      self._play.backup_once()
+      return
+    if self._drive is None:
+      logger.warning("LLM <<back>> but no drive client")
+      return
+    play_cfg = self.config.get("play", {}) or {}
+    follow = play_cfg.get("follow", {}) or {}
+    speed = int(follow.get("backward_speed", follow.get("forward_speed", 90)))
+    dur_ms = int(follow.get("backward_dur_ms", follow.get("forward_dur_ms", 500)))
+    result = self._drive.nudge("backward", dur_ms=dur_ms, speed=speed)
+    if result.get("ok"):
+      logger.info("Drive backward speed=%s dur=%sms reason=voice_back", speed, dur_ms)
+    else:
+      logger.warning("Drive backward failed: %s", result.get("error"))
+
+  def _look_capture_after_reply(self) -> bool:
+    """Fresh eyes capture after <<look>>. True if a scene landed."""
+    ingest = self._scene_ingest or self._play_scene
+    if ingest is None:
+      logger.warning("LLM <<look>> but no scene ingest")
+      return False
+    result = ingest.request_capture(timeout_s=min(float(ingest.capture_timeout_s), 8.0))
+    if not result.get("ok"):
+      logger.warning("LLM <<look>> capture failed: %s", result.get("error"))
+      return False
+    ingest.apply_scene(result, age_s=0.0)
+    if self._scene_ingest is not None and ingest is not self._scene_ingest:
+      self._scene_ingest.apply_scene(result, age_s=0.0)
+    logger.info("LLM <<look>> objects=%s", len(result.get("objects") or []))
+    return True
+
+  def _play_heading_error(self) -> float | None:
+    """Signed DoA error for play (positive = speaker to the robot's right)."""
+    az = self._respeaker_doa.last_azimuth
+    if az is None or self._drive is None:
+      return None
+    from puppet.core.audio.respeaker import signed_heading_error_deg
+
+    err = signed_heading_error_deg(az, front_deg=self._drive.front_deg)
+    if self._drive.invert:
+      err = -err
+    return err
 
   def _maybe_face_speaker(self) -> None:
     """Publish a one-shot turn so the chassis faces the latched DoA direction."""
@@ -822,23 +1005,37 @@ class Orchestrator:
       return
     self._drive.face_azimuth(az)
 
-  @staticmethod
-  def _is_simple_see_question(text: str) -> bool:
-    """Open 'what do you see?' style — answered with spoken_glimpse, no LLM."""
-    t = (text or "").lower()
-    keys = (
-      "what do you see",
-      "what can you see",
-      "qu'est-ce que tu vois",
-      "quest-ce que tu vois",
-      "qu est ce que tu vois",
-      "que vois",
-      "vois-tu",
-      "vois tu",
-      "was siehst",
-      "was kannst du sehen",
-    )
-    return any(k in t for k in keys)
+  def _best_scene_ingest(self):
+    """Prefer the ingest with the newest robot/nav/scene (play or voice)."""
+    candidates = [i for i in (self._play_scene, self._scene_ingest) if i is not None]
+    if not candidates:
+      return None
+    return min(candidates, key=lambda ingest: ingest.scene_age_s())
+
+  def _scene_for_reply(self, *, max_age_s: float = 6.0, capture_timeout_s: float = 2.0) -> dict:
+    """Use a cached scene if fresh; never wait long (audio thread)."""
+    ingest = self._best_scene_ingest()
+    if ingest is None:
+      return {"ok": False, "error": "no scene ingest"}
+    age = ingest.scene_age_s()
+    scene = ingest.latest_scene()
+    if scene and age <= max_age_s:
+      out = {"ok": True, **scene, "_age_s": age, "_cached": True}
+      return out
+    if capture_timeout_s <= 0:
+      if scene:
+        return {"ok": True, **scene, "_age_s": age, "_cached": True, "stale": True}
+      return {"ok": False, "error": "no cached scene"}
+    # Short wait only — a long capture here freezes the mic/STT loop.
+    result = ingest.request_capture(timeout_s=capture_timeout_s)
+    if result.get("ok"):
+      result["_age_s"] = 0.0
+      result["_cached"] = False
+      return result
+    if scene:
+      logger.warning("Capture slow; using stale scene age=%.1fs", age)
+      return {"ok": True, **scene, "_age_s": age, "_cached": True, "stale": True}
+    return result
 
   def _finish_spoken_turn(self, spoken: str, *, user_text: str, tag: str = "") -> None:
     if spoken:
@@ -855,27 +1052,6 @@ class Orchestrator:
     self._end_stt_turn()
     self._enter_post_reply_listen()
     self.bus.emit("generation_done", epoch=self._worker.epoch)
-
-  def _try_vision_glimpse_reply(self, prompt: str) -> bool:
-    if self._scene_ingest is None or not self._is_simple_see_question(prompt):
-      return False
-    result = self._scene_ingest.request_capture()
-    if not result.get("ok"):
-      logger.warning("Vision glimpse capture failed: %s", result.get("error"))
-      return False
-    self._scene_ingest.set_inject_context(False)
-    glimpse = self._scene_ingest.spoken_glimpse(self._vision_lang)
-    nobj = len(result.get("objects") or [])
-    logger.info("Vision question → glimpse objects=%s: %s", nobj, glimpse)
-    self._set_state(PipelineState.SPEAKING)
-    self._tts_pipeline.submit(glimpse)
-    self._tts_pipeline.wait_done()
-    user_text = self.conversation.commit_draft()
-    self._latency.mark_turn_end()
-    self._log_turn_summary()
-    self._resume_stt_after_llm()
-    self._finish_spoken_turn(glimpse, user_text=user_text, tag=" (vision glimpse)")
-    return True
 
   def _log_turn_summary(self) -> None:
     report = self._latency.report()
@@ -913,6 +1089,8 @@ class Orchestrator:
       self._block_vision_tts = True
       return False
     lowered = text.lower()
+    if any(tok in lowered for tok in ("<<follow", "<<seek", "<<stop", "<<look", "<<idle", "<<back", "<<reverse")):
+      return False
     if any(tok in lowered for tok in ("| path", "| ranges", "camerajson", "~1.", "~2.")):
       self._block_vision_tts = True
       return False
@@ -926,26 +1104,49 @@ class Orchestrator:
     self._log_turn_summary()
     self._resume_stt_after_llm()
 
-    spoken = (reply or "").strip()
+    from puppet.play.actions import parse_robot_actions
+
+    spoken, actions = parse_robot_actions(reply or "")
+    if actions:
+      logger.info("LLM robot actions=%s", actions)
+    motion = next(
+      (a for a in reversed(actions) if a in ("follow", "seek", "idle", "back")),
+      None,
+    )
+    if motion == "back":
+      self._apply_llm_backup()
+    elif motion is not None:
+      self._apply_llm_play_mode(motion)
+    looked = False
+    if "look" in actions:
+      looked = self._look_capture_after_reply()
+
     replaced = False
+    ingest = self._scene_ingest or self._play_scene
+    user_draft = self.conversation.draft_user
     need_glimpse = False
-    if self._scene_ingest is not None and self._scene_ingest.inject_context:
-      if (
-        self._worker.suppressed_phrases > 0
-        or self._block_vision_tts
-        or self._looks_like_vision_dump(spoken)
+    if ingest is not None:
+      need_glimpse = self._should_force_object_glimpse(
+        looked=looked,
+        inject_context=bool(ingest.inject_context),
+        has_objects=ingest.has_objects(),
+        mentions_objects=ingest.reply_mentions_objects(spoken, self._vision_lang),
+        vision_dump=(
+          self._worker.suppressed_phrases > 0
+          or self._block_vision_tts
+          or self._looks_like_vision_dump(spoken)
+        ),
+        suppressed_phrases=self._worker.suppressed_phrases > 0,
+        vision_question=self._looks_like_vision_question(user_draft),
+        motion=motion in ("follow", "seek", "idle", "back"),
+      )
+      if need_glimpse and ingest.has_objects() and not ingest.reply_mentions_objects(
+        spoken, self._vision_lang
       ):
-        need_glimpse = True
-      elif (
-        self._scene_ingest.has_objects()
-        and not self._scene_ingest.reply_mentions_objects(spoken, self._vision_lang)
-      ):
-        # Model answered but ignored YOLO objects (e.g. only talked about the floor).
-        need_glimpse = True
         logger.warning("LLM ignored detected objects; forcing glimpse")
 
-    if need_glimpse and self._scene_ingest is not None:
-      glimpse = self._scene_ingest.spoken_glimpse(self._vision_lang)
+    if need_glimpse and ingest is not None:
+      glimpse = ingest.spoken_glimpse(self._vision_lang)
       logger.info("Replacing reply with glimpse. Was: %s", spoken[:200])
       self._tts_pipeline.stop()
       self._stop_tts_playback()
@@ -954,8 +1155,9 @@ class Orchestrator:
       self._tts_pipeline.submit(spoken)
       self._tts_pipeline.wait_done()
 
-    if self._scene_ingest is not None:
-      self._scene_ingest.set_inject_context(False)
+    for item in (self._scene_ingest, self._play_scene):
+      if item is not None:
+        item.set_inject_context(False)
 
     user_text = self.conversation.commit_draft()
     self._finish_spoken_turn(
@@ -1186,9 +1388,18 @@ class Orchestrator:
       self._playback = None
     self._mouth.close()
     self._respeaker_doa.close()
+    if self._play is not None:
+      self._play.close()
+      self._play = None
+    if self._play_scene is not None:
+      self._play_scene.stop()
+      self._play_scene = None
     if self._drive is not None:
       self._drive.stop()
       self._drive = None
     if self._scene_ingest is not None:
       self._scene_ingest.stop()
       self._scene_ingest = None
+    if self._log_pub is not None:
+      self._log_pub.stop()
+      self._log_pub = None

@@ -47,7 +47,7 @@ Profile files: `config/profiles/respeaker.yaml`, `config/profiles/regular-mic.ya
 | Key | Default | Meaning |
 |-----|---------|---------|
 | `vision_enabled` | `true` | Subscribe to `robot/nav/scene` and inject `CameraJSON` when needed |
-| `capture_before_reply` | `false` | If `true`, capture before every reply; if `false`, only when the user asks about seeing the room |
+| `capture_before_reply` | `false` | If `true`, capture before every reply; if `false`, use the cache and let Gemma emit `<<look>>` |
 | `capture_topic` | `robot/nav/capture` | Capture request topic (eyes must be running) |
 | `scene_topic` | `robot/nav/scene` | Scene result topic |
 | `capture_timeout_s` | `60` | Max wait for a matching scene |
@@ -69,6 +69,21 @@ In `profiles/respeaker.yaml` → `audio.respeaker`:
 | `doa_invert` | `false` | Flip left/right if mounting is mirrored |
 
 Needs the drive MQTT bridge running.
+
+## Play / movement (`default.yaml` → `play`)
+
+See [movement.md](../../docs/movement.md) for the full follow / hide-and-seek design.
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `enabled` | `true` | Background play supervisor |
+| `allow_motion` | `true` | Publish drive nudges (`false` = voice only) |
+| `follow.stop_m` | `0.9` | Stop this far from the child |
+| `follow.obstacle_m` | `0.5` | Sidestep if something else is closer |
+| `follow.forward_dur_ms` | `500` | One roll pulse |
+| `follow.backward_dur_ms` | `500` | One reverse pulse |
+
+Voice: Gemma tags (`<<follow>>`, `<<seek>>`, `<<stop>>`, `<<back>>`). MQTT: `robot/play/cmd` (`follow` / `seek` / `idle` / `back`).
 
 ## Common tuning
 

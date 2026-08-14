@@ -1,5 +1,15 @@
 """MQTT helpers for puppet (vision scene ingest)."""
 
-from .scene import SceneIngest, looks_like_vision_dump
+from .scene import (
+  SceneIngest,
+  looks_like_vision_dump,
+  looks_like_vision_question,
+  should_force_object_glimpse,
+)
 
-__all__ = ["SceneIngest", "looks_like_vision_dump"]
+__all__ = [
+  "SceneIngest",
+  "looks_like_vision_dump",
+  "looks_like_vision_question",
+  "should_force_object_glimpse",
+]

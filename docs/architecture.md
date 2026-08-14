@@ -32,7 +32,9 @@ Mic → Silero VAD → STT (streaming partials → draft_user)
 
 MQTT is suitable for **control and perception events** (vision capture / scene). Real-time PCM stays **in-process**.
 
-With `mqtt.vision_enabled: true`, brain requests `robot/nav/capture` when the user asks about seeing the room (or always if `capture_before_reply: true`), then injects `CameraJSON` into Gemma's system prompt (see `../../docs/mqtt.md`).
+With `mqtt.vision_enabled: true`, brain injects cached `CameraJSON` into Gemma's system prompt. Gemma may emit `<<look>>` for a fresh capture (`capture_before_reply: true` still captures every reply). See `../../docs/mqtt.md`.
+
+`play.enabled` starts a background loop that captures scenes and issues short drive nudges for follow / hide-and-seek (see `../../docs/movement.md`).
 
 ## Config
 

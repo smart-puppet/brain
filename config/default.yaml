@@ -35,3 +35,27 @@ mqtt:
   capture_timeout_s: 60.0
   vision_min_interval_s: 1.0
   drive_cmd_topic: robot/drive/cmd
+  drive_stop_topic: robot/drive/stop
+  play_cmd_topic: robot/play/cmd
+  play_status_topic: robot/play/status
+
+# Kid play: follow a person / hide-and-seek (needs eyes + drive MQTT bridge).
+# Safety: only short dur>0 nudges; loop pauses while Kace is thinking or speaking.
+play:
+  enabled: true
+  allow_motion: true          # set false to keep voice intents but never roll
+  tick_s: 0.15
+  capture_timeout_s: 8
+  follow:
+    stop_m: 0.9               # stay this far from the child
+    obstacle_m: 0.5           # hard stop if something else is closer
+    sector_block_m: 0.7
+    forward_speed: 90
+    forward_dur_ms: 500
+    backward_speed: 90
+    backward_dur_ms: 500
+    turn_speed: 110
+    turn_dur_ms: 280
+    search_turn_dur_ms: 700
+    lost_ticks: 2
+    found_m: 1.15             # hide-and-seek: stop and idle when this close

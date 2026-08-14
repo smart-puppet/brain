@@ -380,6 +380,7 @@ class RespeakerDoaMonitor:
     self._active_product_id: int | None = None
     self._utterance_samples: list[int] = []
     self._last_reading: DoaReading | None = None
+    self._last_azimuth: int | None = None
 
   @property
   def enabled(self) -> bool:
@@ -388,6 +389,14 @@ class RespeakerDoaMonitor:
   @property
   def debug(self) -> bool:
     return self._debug
+
+  @property
+  def last_azimuth(self) -> int | None:
+    """Most recent speech azimuth (survives take_utterance_azimuth)."""
+    peeked = self.peek_utterance_azimuth()
+    if peeked is not None:
+      return peeked
+    return self._last_azimuth
 
   def close(self) -> None:
     _close_xvf_usb(self._usb_dev)
@@ -439,7 +448,9 @@ class RespeakerDoaMonitor:
       return None
     self._last_reading = reading
     if reading.speech_detected or not self._prefer_speech_flag:
-      self._utterance_samples.append(int(reading.azimuth_deg) % 360)
+      az = int(reading.azimuth_deg) % 360
+      self._last_azimuth = az
+      self._utterance_samples.append(az)
       # Cap memory for long utterances
       if len(self._utterance_samples) > 40:
         self._utterance_samples = self._utterance_samples[-40:]

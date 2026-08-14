@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 class DriveClient:
-  """Thin MQTT publisher for robot/drive/cmd (turn toward DoA)."""
+  """MQTT publisher for robot/drive/cmd (DoA face + timed play nudges)."""
 
   def __init__(
     self,
@@ -21,6 +21,7 @@ class DriveClient:
     broker: str = "127.0.0.1",
     port: int = 1883,
     cmd_topic: str = "robot/drive/cmd",
+    stop_topic: str = "robot/drive/stop",
     front_deg: float = 60.0,
     deadband_deg: float = 25.0,
     max_turn_deg: float = 120.0,
@@ -32,6 +33,7 @@ class DriveClient:
     self.broker = broker
     self.port = port
     self.cmd_topic = cmd_topic
+    self.stop_topic = stop_topic
     self.front_deg = float(front_deg)
     self.deadband_deg = float(deadband_deg)
     self.max_turn_deg = float(max_turn_deg)
@@ -76,6 +78,30 @@ class DriveClient:
     except Exception as exc:  # noqa: BLE001
       return {"ok": False, "error": str(exc)}
     return {"ok": True, "published": body}
+
+  def nudge(self, cmd: str, *, dur_ms: int, speed: int | None = None) -> dict[str, Any]:
+    """One-shot timed motion (preferred for play / planner ticks)."""
+    body = {
+      "cmd": cmd,
+      "speed": int(speed if speed is not None else self.turn_speed),
+      "ttl": self.ttl_ms,
+      "dur": max(0, int(dur_ms)),
+    }
+    return self.publish_cmd(body)
+
+  def idle(self) -> dict[str, Any]:
+    """Stop the current segment without latching estop."""
+    return self.publish_cmd({"cmd": "idle"})
+
+  def estop(self) -> dict[str, Any]:
+    """Immediate estop latch (needs a later clear)."""
+    if self._client is None:
+      return {"ok": False, "error": self._error or "mqtt not connected"}
+    try:
+      self._client.publish(self.stop_topic, json.dumps({}), qos=1)
+    except Exception as exc:  # noqa: BLE001
+      return {"ok": False, "error": str(exc)}
+    return {"ok": True, "estop": True}
 
   def face_azimuth(self, azimuth_deg: float) -> dict[str, Any]:
     """Turn left/right so chassis front aligns with the given DoA azimuth."""

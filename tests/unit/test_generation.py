@@ -51,6 +51,20 @@ class SlowChunkTts:
     self._stopped = True
 
 
+def test_phrase_clean_strips_robot_tags() -> None:
+  from puppet.play.actions import strip_robot_actions
+
+  playback = MagicMock()
+  worker = _worker(phrase_playback=playback, phrase_clean=strip_robot_actions)
+  worker._submit_phrase("Okay! I will follow you. <<follow>>")
+  playback.submit.assert_called_once()
+  spoken = playback.submit.call_args[0][0]
+  assert "<<" not in spoken
+  assert "Okay" in spoken
+  worker._submit_phrase("<<seek>>")
+  assert playback.submit.call_count == 1
+
+
 def test_pipeline_prefetches_next_phrase_while_playing() -> None:
   tts = SlowChunkTts()
   play_started = threading.Event()
@@ -77,4 +91,3 @@ def test_pipeline_prefetches_next_phrase_while_playing() -> None:
   assert play_count["n"] == 1
   pipeline.wait_done(timeout=2.0)
   pipeline.stop()
-
