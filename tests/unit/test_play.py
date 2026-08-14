@@ -1,4 +1,5 @@
 from puppet.play.actions import parse_robot_actions, strip_robot_actions
+from puppet.play.phrases import play_phrase
 from puppet.play.policy import PlayConfig, PlayMemory, plan_follow, plan_seek
 
 
@@ -102,6 +103,12 @@ def test_follow_approaches_when_clear() -> None:
   assert nudge.reason == "approach"
 
 
+def test_play_found_and_giveup_phrases() -> None:
+  assert "Found" in play_phrase("found", "en")
+  assert "trouve" in play_phrase("found", "fr").lower()
+  assert "finde" in play_phrase("giveup", "de").lower()
+
+
 def test_seek_found_when_close() -> None:
   scene = {
     "closest_m": 1.0,
@@ -115,12 +122,31 @@ def test_seek_found_when_close() -> None:
 
 def test_seek_searches_when_no_person() -> None:
   scene = {"closest_m": 2.0, "sectors": {}, "objects": []}
-  mem = PlayMemory()
-  cfg = PlayConfig(lost_ticks_max=1)
-  plan_seek(scene, mem, cfg)
-  nudge = plan_seek(scene, mem, cfg)
+  nudge = plan_seek(scene, PlayMemory(), PlayConfig())
   assert nudge.reason == "search"
   assert nudge.cmd in ("turn_left", "turn_right")
+
+
+def test_seek_does_not_roll_toward_voice() -> None:
+  scene = {
+    "closest_m": 1.5,
+    "sectors": {"left": 1.5, "center": 1.5, "right": 1.5},
+    "objects": [],
+  }
+  nudge = plan_seek(scene, PlayMemory(), PlayConfig(), heading_error_deg=5)
+  assert nudge.cmd != "forward"
+  assert nudge.reason != "approach_voice"
+
+
+def test_seek_gives_up_when_lost_too_long() -> None:
+  scene = {"closest_m": 0.7, "sectors": {}, "objects": []}
+  mem = PlayMemory()
+  cfg = PlayConfig(seek_giveup_ticks=3)
+  plan_seek(scene, mem, cfg)
+  plan_seek(scene, mem, cfg)
+  nudge = plan_seek(scene, mem, cfg)
+  assert nudge.cmd == "idle"
+  assert nudge.reason == "giveup"
 
 
 def test_lost_turns_toward_voice() -> None:

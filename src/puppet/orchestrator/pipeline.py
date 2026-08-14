@@ -301,6 +301,7 @@ class Orchestrator:
             search_turn_dur_ms=int(follow.get("search_turn_dur_ms", 700)),
             lost_ticks_max=int(follow.get("lost_ticks", 2)),
             found_m=float(follow.get("found_m", 1.15)),
+            seek_giveup_ticks=int(follow.get("seek_giveup_ticks", 24)),
           ),
           allow_motion=bool(play_cfg.get("allow_motion", False)),
           tick_s=float(play_cfg.get("tick_s", 0.15)),
@@ -310,6 +311,7 @@ class Orchestrator:
             self._reply_in_progress or self.state != PipelineState.LISTENING
           ),
           heading_fn=self._play_heading_error,
+          announce_fn=self._announce_play_event,
         )
         self._play.start()
         logger.info(
@@ -940,6 +942,38 @@ class Orchestrator:
       )
     else:
       logger.warning("Vision refresh failed: %s", result.get("error"))
+
+  def _announce_play_event(self, reason: str) -> None:
+    """Speak a canned line when hide-and-seek ends (found / give up)."""
+    if reason not in ("found", "giveup"):
+      return
+    if self._reply_still_active():
+      logger.info("Play %s — skip voice, reply in progress", reason)
+      return
+    from puppet.play.phrases import play_phrase
+
+    text = play_phrase(reason, self._vision_lang)
+    if not text:
+      return
+    logger.info("Play announce %s: %s", reason, text)
+    self._reply_in_progress = True
+    self._recent_tts_phrases.append(text)
+    self._spoken_reply_corpus = text
+    self._set_state(PipelineState.SPEAKING)
+    try:
+      self._tts_pipeline.submit(text)
+      self._tts_pipeline.wait_done()
+    except Exception:
+      logger.exception("Play announce TTS failed")
+    if text:
+      self.conversation.add_assistant(text)
+      self.bus.emit("assistant_reply", text=text)
+      logger.info("Assistant: %s", text)
+    self._reply_in_progress = False
+    self._stop_tts_playback()
+    self._set_state(PipelineState.LISTENING)
+    self._end_stt_turn()
+    self._enter_post_reply_listen()
 
   def _apply_llm_play_mode(self, mode: str) -> None:
     if self._play is None:

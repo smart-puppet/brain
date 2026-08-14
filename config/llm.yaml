@@ -6,10 +6,12 @@
 llm:
   backend: llama
   # Must match the LAST build script you ran (not a runtime switch between installs):
-  # upstream: ./scripts/build_llama.sh       — ggml-org/llama.cpp (Gemma, Q4, etc.)
+  # upstream: ./scripts/build_llama.sh       — ggml-org/llama.cpp (Gemma, Q4, Qwen3.5, etc.)
   # prism:    ./scripts/build_llama_prism.sh  — Prism fork for Ternary-Bonsai Q2_0
   binding: upstream
   model_path: models/llm/Gemma-4-E2B-it-fraQtl-HiFi-Q4_K_M.gguf
+  # Tried: models/llm/Qwen3.5-2B-Q4_K_M.gguf
+  # Tried: models/llm/Qwen3.5-0.8B-Q4_K_M.gguf
   n_ctx: 4096
   n_gpu_layers: -1
   n_batch: 16

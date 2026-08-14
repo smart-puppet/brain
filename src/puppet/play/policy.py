@@ -26,6 +26,7 @@ class PlayConfig:
   search_turn_dur_ms: int = 700
   lost_ticks_max: int = 2
   found_m: float = 1.15
+  seek_giveup_ticks: int = 24
   doa_deadband_deg: float = 25.0
 
 
@@ -203,7 +204,11 @@ def plan_seek(
   *,
   heading_error_deg: Optional[float] = None,
 ) -> DriveNudge:
-  """Look around until a person is seen, then follow until close (found)."""
+  """Look around until a person is seen, then follow until close (found).
+
+  While lost, only turn in place — never roll toward the last voice. Give up
+  after ``seek_giveup_ticks`` so the game cannot run forever.
+  """
   person = nearest_person(scene)
   if person is not None:
     person_m = _finite_m(person.get("dist_m"))
@@ -211,7 +216,32 @@ def plan_seek(
       mem.lost_ticks = 0
       return DriveNudge("idle", reason="found", person=person)
     return plan_follow(scene, mem, cfg, heading_error_deg=heading_error_deg)
-  return _plan_lost(scene, mem, cfg, heading_error_deg=heading_error_deg)
+  return _plan_seek_lost(mem, cfg, heading_error_deg=heading_error_deg)
+
+
+def _plan_seek_lost(
+  mem: PlayMemory,
+  cfg: PlayConfig,
+  *,
+  heading_error_deg: Optional[float],
+) -> DriveNudge:
+  mem.lost_ticks += 1
+  if mem.lost_ticks >= max(1, cfg.seek_giveup_ticks):
+    return DriveNudge("idle", reason="giveup")
+  if heading_error_deg is not None and abs(heading_error_deg) >= cfg.doa_deadband_deg:
+    cmd = "turn_right" if heading_error_deg > 0 else "turn_left"
+    span = min(abs(heading_error_deg), 90.0) / 90.0
+    dur = max(250, int(cfg.search_turn_dur_ms * span))
+    return DriveNudge(cmd, speed=cfg.turn_speed, dur_ms=dur, reason="turn_to_voice")
+  if mem.lost_ticks % 2 == 1:
+    mem.search_dir = "turn_right" if mem.search_dir == "turn_left" else "turn_left"
+    return DriveNudge(
+      mem.search_dir,
+      speed=cfg.turn_speed,
+      dur_ms=cfg.search_turn_dur_ms,
+      reason="search",
+    )
+  return DriveNudge("idle", reason="lost")
 
 
 def plan(

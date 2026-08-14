@@ -85,6 +85,9 @@ class LlamaLlm(LlmBackend):
     type_v: str | int = "q4_0",
     flash_attn: bool = True,
     temperature: float = 0.7,
+    top_p: float = 0.95,
+    top_k: int = 40,
+    presence_penalty: float = 0.0,
     max_tokens: int = 512,
     system_prompt: str = "",
   ) -> None:
@@ -97,6 +100,9 @@ class LlamaLlm(LlmBackend):
 
     self._max_tokens = max_tokens
     self._temperature = temperature
+    self._top_p = float(top_p)
+    self._top_k = int(top_k)
+    self._presence_penalty = float(presence_penalty)
     self._system_prompt = system_prompt.strip()
     self._n_ctx = n_ctx
     self._cancelled = False
@@ -194,6 +200,8 @@ class LlamaLlm(LlmBackend):
       "If they asked what you see and objects is empty or stale_s is large, say you are looking "
       "and add <<look>> as a hidden last line. "
       "To roll after you speak, add one hidden last line: <<follow>> or <<seek>> or <<stop>> or <<back>>. "
+      "<<seek>> means you look for the child; you cannot hide. "
+      "If BodyStatus already says searching, do not add <<seek>> again; add <<stop>> if they ask if you are hidden. "
       "No tag for stories or normal chat. Never say the tags out loud.\n"
       f"{line}"
     )
@@ -226,6 +234,9 @@ class LlamaLlm(LlmBackend):
         messages=messages,
         stream=True,
         temperature=self._temperature,
+        top_p=self._top_p,
+        top_k=self._top_k,
+        presence_penalty=self._presence_penalty,
         max_tokens=self._max_tokens,
       )
       for chunk in stream:
@@ -270,6 +281,9 @@ def create_llm(config: dict[str, Any]) -> LlmBackend:
     type_v=llm_cfg.get("type_v", "q4_0"),
     flash_attn=bool(llm_cfg.get("flash_attn", True)),
     temperature=llm_cfg.get("temperature", 0.7),
+    top_p=float(llm_cfg.get("top_p", 0.95)),
+    top_k=int(llm_cfg.get("top_k", 40)),
+    presence_penalty=float(llm_cfg.get("presence_penalty", 0.0)),
     max_tokens=llm_cfg.get("max_tokens", 512),
     system_prompt=llm_cfg.get("system_prompt", ""),
   )

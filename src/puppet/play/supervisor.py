@@ -40,6 +40,7 @@ class PlaySupervisor:
     status_topic: str = "robot/play/status",
     busy_fn: Optional[BusyFn] = None,
     heading_fn: Optional[Callable[[], Optional[float]]] = None,
+    announce_fn: Optional[Callable[[str], None]] = None,
   ) -> None:
     self._scene = scene
     self._drive = drive
@@ -50,6 +51,7 @@ class PlaySupervisor:
     self.status_topic = status_topic
     self._busy_fn = busy_fn
     self._heading_fn = heading_fn
+    self._announce_fn = announce_fn
     self._lock = threading.Lock()
     self._mode = "idle"
     self._mem = PlayMemory()
@@ -254,5 +256,10 @@ class PlaySupervisor:
       )
       self._apply(nudge)
       self._publish_status()
-      if nudge.reason == "found":
+      if nudge.reason in ("found", "giveup"):
         self.set_mode("idle")
+        if self._announce_fn is not None:
+          try:
+            self._announce_fn(nudge.reason)
+          except Exception:
+            logger.exception("Play announce failed (%s)", nudge.reason)

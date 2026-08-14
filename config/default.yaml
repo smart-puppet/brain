@@ -59,3 +59,4 @@ play:
     search_turn_dur_ms: 700
     lost_ticks: 2
     found_m: 1.15             # hide-and-seek: stop and idle when this close
+    seek_giveup_ticks: 24     # ~15s of no person → stop seeking

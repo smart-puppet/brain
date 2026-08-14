@@ -13,6 +13,16 @@ _PHRASES: dict[str, dict[str, str]] = {
     "fr": "Cache-cache! Je vais te chercher. Un, deux, trois, j'arrive!",
     "de": "Verstecken! Ich suche dich. Ich komme!",
   },
+  "found": {
+    "en": "Found you!",
+    "fr": "Te voila ! Je t'ai trouve !",
+    "de": "Gefunden! Da bist du!",
+  },
+  "giveup": {
+    "en": "I cannot find you. Let's stop.",
+    "fr": "Je ne te trouve pas. On arrete ?",
+    "de": "Ich finde dich nicht. Wir hoeren auf.",
+  },
   "closer": {
     "en": "I'm coming closer!",
     "fr": "J'arrive, je me rapproche!",
