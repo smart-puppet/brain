@@ -265,10 +265,11 @@ If open fails, set `audio.input_device` in `config/default.yaml`.
 ./scripts/run_puppet.sh --once 5
 ```
 
-## 7. systemd (optional)
+## 7. systemd
 
-Copy `deploy/systemd/puppet.service` to `/etc/systemd/system/`, adjust paths, then:
+The voice unit is `puppet-brain.service`. Install it with drive and eyes via the stack doc: [systemd](https://github.com/smart-puppet/docs/blob/main/systemd.md) (`puppet.target`; the MQTT UART bridge starts first).
 
 ```bash
-sudo systemctl enable --now puppet
+sudo systemctl enable --now puppet.target
+journalctl -u puppet-brain -f
 ```

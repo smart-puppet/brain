@@ -1,0 +1,29 @@
+[Unit]
+Description=Puppet brain voice (STT / LLM / TTS)
+Documentation=https://github.com/smart-puppet/docs/blob/main/systemd.md
+After=network.target sound.target mosquitto.service puppet-drive.service puppet-eyes.service user@1000.service
+Wants=mosquitto.service puppet-drive.service puppet-eyes.service user@1000.service
+PartOf=puppet.target
+
+[Service]
+Type=simple
+User=cvincent
+Group=cvincent
+SupplementaryGroups=audio plugdev
+WorkingDirectory=/home/cvincent/Projects/01-Puppet/brain
+Environment=PYTHONUNBUFFERED=1
+Environment=HOME=/home/cvincent
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+Environment=PULSE_RUNTIME_PATH=/run/user/1000/pulse
+Environment=PULSE_SERVER=unix:/run/user/1000/pulse/native
+Environment=PUPPET_CONFIG=/home/cvincent/Projects/01-Puppet/brain/config
+# PulseAudio is a user service; without this socket, PyAudio opens a silent ALSA default.
+ExecStartPre=/bin/sh -c 'for i in $(seq 1 40); do [ -S /run/user/1000/pulse/native ] && exit 0; sleep 0.5; done; echo "PulseAudio socket missing. Run: sudo loginctl enable-linger cvincent" >&2; exit 1'
+ExecStart=/home/cvincent/Projects/01-Puppet/brain/scripts/run_puppet.sh
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=20
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=puppet.target

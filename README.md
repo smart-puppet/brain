@@ -51,4 +51,5 @@ models/          Model files (GGUF, ONNX)
 ```
 
 See [docs/architecture.md](docs/architecture.md) for design details.  
-Native builds (parakeet.cpp, llama-cpp-python + CUDA): [docs/deployment.md](docs/deployment.md).
+Native builds (parakeet.cpp, llama-cpp-python + CUDA): [docs/deployment.md](docs/deployment.md).  
+Boot service: `deploy/systemd/puppet-brain.service` — stack install in [systemd](https://github.com/smart-puppet/docs/blob/main/systemd.md).
