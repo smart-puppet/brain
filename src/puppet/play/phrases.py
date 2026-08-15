@@ -9,9 +9,9 @@ _PHRASES: dict[str, dict[str, str]] = {
     "de": "Okay! Ich folge dir. Sag Stopp wenn ich stehen bleiben soll.",
   },
   "seek": {
-    "en": "Hide and seek! I will look for you. Ready or not, here I come!",
-    "fr": "Cache-cache! Je vais te chercher. Un, deux, trois, j'arrive!",
-    "de": "Verstecken! Ich suche dich. Ich komme!",
+    "en": "One, two, three, four, five, six, seven, eight, nine, ten. Ready or not, here I come!",
+    "fr": "Un, deux, trois, quatre, cinq, six, sept, huit, neuf, dix. J'arrive!",
+    "de": "Eins, zwei, drei, vier, fünf, sechs, sieben, acht, neun, zehn. Ich komme!",
   },
   "found": {
     "en": "Found you!",
@@ -32,6 +32,11 @@ _PHRASES: dict[str, dict[str, str]] = {
     "en": "Okay, I will stay here.",
     "fr": "D'accord, je reste ici.",
     "de": "Okay, ich bleibe hier.",
+  },
+  "back": {
+    "en": "Okay, I will reverse a little.",
+    "fr": "D'accord, je recule un peu.",
+    "de": "Okay, ich fahre ein Stueck zurueck.",
   },
   "disabled": {
     "en": "I would love to roll, but moving is switched off right now.",

@@ -108,6 +108,9 @@ class ParakeetStt(SttBackend):
   def _ensure_stream(self) -> None:
     if self._stream is not None:
       return
+    if self._ctx is None:
+      self._load()
+    assert self._ctx is not None
     self._stream = self._ctx.stream_begin_lang(self._language)
 
   def _prepare_pcm(self, pcm: np.ndarray, sample_rate: int) -> np.ndarray:

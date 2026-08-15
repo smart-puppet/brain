@@ -50,13 +50,16 @@ play:
     stop_m: 0.9               # stay this far from the child
     obstacle_m: 0.5           # hard stop if something else is closer
     sector_block_m: 0.7
-    forward_speed: 90
+    forward_speed: 105
     forward_dur_ms: 500
-    backward_speed: 90
+    backward_speed: 105
     backward_dur_ms: 500
-    turn_speed: 110
+    turn_speed: 125
     turn_dur_ms: 280
-    search_turn_dur_ms: 700
+    search_turn_dur_ms: 1800  # finish a real pivot; several in a row before rolling
+    search_turn_ticks: 4
+    search_forward_ticks: 4   # rolls after each sweep so it actually covers the room
+    search_forward_dur_ms: 1200
     lost_ticks: 2
     found_m: 1.15             # hide-and-seek: stop and idle when this close
-    seek_giveup_ticks: 24     # ~15s of no person → stop seeking
+    seek_giveup_ticks: 40     # lost captures while rolling/turning → give up

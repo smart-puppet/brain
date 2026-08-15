@@ -87,6 +87,15 @@ def test_create_stt_passes_thread_config(monkeypatch) -> None:
   assert thread_calls == [4]
 
 
+def test_suspend_then_feed_reloads_context(monkeypatch) -> None:
+  stt = _make_stt(monkeypatch)
+  stt.suspend()
+  assert stt._ctx is None
+  silence = np.zeros(stt._feed_samples, dtype=np.float32)
+  stt.feed(silence, SAMPLE_RATE)
+  assert stt._ctx is not None
+
+
 def test_create_stt_runs_warmup_when_enabled(monkeypatch) -> None:
   stt = _make_stt(monkeypatch)
   warmup_calls: list[int] = []

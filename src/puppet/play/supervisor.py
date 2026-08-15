@@ -60,6 +60,7 @@ class PlaySupervisor:
     self._last_cmd: Optional[str] = None
     self._status: dict[str, Any] = {"mode": "idle", "reason": "idle"}
     self._cmd_client = None
+    self._pending_announce: Optional[str] = None
 
   @property
   def mode(self) -> str:
@@ -98,16 +99,19 @@ class PlaySupervisor:
         pass
       self._cmd_client = None
 
-  def set_mode(self, mode: str) -> str:
+  def set_mode(self, mode: str, *, announce: bool = True) -> str:
     mode = (mode or "idle").strip().lower()
     if mode not in ("idle", "follow", "seek"):
       mode = "idle"
     with self._lock:
-      same = mode == self._mode
+      previous = self._mode
+      same = mode == previous
       self._mode = mode
       if not same:
         self._mem = PlayMemory()
       self._status = {"mode": mode, "reason": "start" if mode != "idle" else "idle"}
+      if announce and not same and mode == "seek":
+        self._pending_announce = "seek"
     if mode == "idle":
       self._idle(force=True)
     if not same:
@@ -115,9 +119,15 @@ class PlaySupervisor:
       self._publish_status()
     return mode
 
+  def take_pending_announce(self) -> Optional[str]:
+    with self._lock:
+      kind = self._pending_announce
+      self._pending_announce = None
+      return kind
+
   def backup_once(self) -> None:
     """Stop follow/seek, then one timed reverse nudge."""
-    self.set_mode("idle")
+    self.set_mode("idle", announce=False)
     self._apply(
       DriveNudge(
         "backward",
@@ -200,11 +210,25 @@ class PlaySupervisor:
 
   def _run(self) -> None:
     while not self._stop.wait(self._tick_s):
-      mode = self.mode
-      if mode == "idle":
+      with self._lock:
+        mode = self._mode
+        pending = self._pending_announce
+      if mode == "idle" and not pending:
         continue
       if self._busy_fn is not None and self._busy_fn():
         # Skip ticks but do not publish idle — that cancelled DoA face-speaker turns.
+        continue
+      kind = self.take_pending_announce()
+      if kind:
+        if kind == "seek":
+          self._idle(force=True)
+        if self._announce_fn is not None:
+          try:
+            self._announce_fn(kind)
+          except Exception:
+            logger.exception("Play announce failed (%s)", kind)
+        continue
+      if mode == "idle":
         continue
       result = self._scene.request_capture()
       if not result.get("ok"):
@@ -257,9 +281,13 @@ class PlaySupervisor:
       self._apply(nudge)
       self._publish_status()
       if nudge.reason in ("found", "giveup"):
-        self.set_mode("idle")
+        self.set_mode("idle", announce=False)
         if self._announce_fn is not None:
           try:
             self._announce_fn(nudge.reason)
           except Exception:
             logger.exception("Play announce failed (%s)", nudge.reason)
+        continue
+      if nudge.dur_ms > 0 and nudge.cmd != "idle":
+        # A new dur>0 command preempts the chassis. Finish this sweep first.
+        self._stop.wait(min(nudge.dur_ms, 8000) / 1000.0)

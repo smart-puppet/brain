@@ -17,16 +17,19 @@ class PlayConfig:
   obstacle_m: float = 0.5
   sector_block_m: float = 0.7
   person_margin_m: float = 0.2
-  forward_speed: int = 90
+  forward_speed: int = 105
   forward_dur_ms: int = 500
-  backward_speed: int = 90
+  backward_speed: int = 105
   backward_dur_ms: int = 500
-  turn_speed: int = 110
+  turn_speed: int = 125
   turn_dur_ms: int = 280
-  search_turn_dur_ms: int = 700
+  search_turn_dur_ms: int = 1800
+  search_turn_ticks: int = 4
+  search_forward_ticks: int = 4
+  search_forward_dur_ms: int = 1200
   lost_ticks_max: int = 2
   found_m: float = 1.15
-  seek_giveup_ticks: int = 24
+  seek_giveup_ticks: int = 40
   doa_deadband_deg: float = 25.0
 
 
@@ -158,6 +161,19 @@ def plan_follow(
   )
 
 
+def _flip_search_dir(mem: PlayMemory) -> None:
+  mem.search_dir = "turn_right" if mem.search_dir == "turn_left" else "turn_left"
+
+
+def _search_turn(mem: PlayMemory, cfg: PlayConfig, *, reason: str) -> DriveNudge:
+  return DriveNudge(
+    mem.search_dir,
+    speed=cfg.turn_speed,
+    dur_ms=cfg.search_turn_dur_ms,
+    reason=reason,
+  )
+
+
 def _plan_lost(
   scene: dict[str, Any],
   mem: PlayMemory,
@@ -165,11 +181,19 @@ def _plan_lost(
   *,
   heading_error_deg: Optional[float],
 ) -> DriveNudge:
-  """No YOLO person: wait in place. Do not hunt last-voice DoA (it does not
-  update while the child is quiet, so chasing it spins forever)."""
-  del scene, cfg, heading_error_deg
+  """No YOLO person: wait a tick or two for flicker, then sweep one way.
+
+  Do not chase last-voice DoA — it freezes after speech and spins forever.
+  """
+  del scene, heading_error_deg
   mem.lost_ticks += 1
-  return DriveNudge("idle", reason="lost")
+  if mem.lost_ticks <= max(0, cfg.lost_ticks_max):
+    return DriveNudge("idle", reason="lost")
+  turn_n = max(1, cfg.search_turn_ticks)
+  scan_index = mem.lost_ticks - max(0, cfg.lost_ticks_max) - 1
+  if scan_index > 0 and scan_index % turn_n == 0:
+    _flip_search_dir(mem)
+  return _search_turn(mem, cfg, reason="scan")
 
 
 def plan_seek(
@@ -179,10 +203,11 @@ def plan_seek(
   *,
   heading_error_deg: Optional[float] = None,
 ) -> DriveNudge:
-  """Look around until a person is seen, then follow until close (found).
+  """Wander the room until a person is seen, then follow until close (found).
 
-  While lost, only turn in place — never roll toward the last voice. Give up
-  after ``seek_giveup_ticks`` so the game cannot run forever.
+  While lost, roll forward when the path is clear and turn to look around —
+  do not spin in place or chase last-voice DoA. Give up after
+  ``seek_giveup_ticks`` so the game cannot run forever.
   """
   person = nearest_person(scene)
   if person is not None:
@@ -191,32 +216,41 @@ def plan_seek(
       mem.lost_ticks = 0
       return DriveNudge("idle", reason="found", person=person)
     return plan_follow(scene, mem, cfg, heading_error_deg=heading_error_deg)
-  return _plan_seek_lost(mem, cfg, heading_error_deg=heading_error_deg)
+  return _plan_seek_lost(scene, mem, cfg)
 
 
 def _plan_seek_lost(
+  scene: dict[str, Any],
   mem: PlayMemory,
   cfg: PlayConfig,
-  *,
-  heading_error_deg: Optional[float],
 ) -> DriveNudge:
   mem.lost_ticks += 1
   if mem.lost_ticks >= max(1, cfg.seek_giveup_ticks):
     return DriveNudge("idle", reason="giveup")
-  if heading_error_deg is not None and abs(heading_error_deg) >= cfg.doa_deadband_deg:
-    cmd = "turn_right" if heading_error_deg > 0 else "turn_left"
-    span = min(abs(heading_error_deg), 90.0) / 90.0
-    dur = max(250, int(cfg.search_turn_dur_ms * span))
-    return DriveNudge(cmd, speed=cfg.turn_speed, dur_ms=dur, reason="turn_to_voice")
-  if mem.lost_ticks % 2 == 1:
-    mem.search_dir = "turn_right" if mem.search_dir == "turn_left" else "turn_left"
-    return DriveNudge(
-      mem.search_dir,
-      speed=cfg.turn_speed,
-      dur_ms=cfg.search_turn_dur_ms,
-      reason="search",
-    )
-  return DriveNudge("idle", reason="lost")
+  sectors = scene.get("sectors") if isinstance(scene.get("sectors"), dict) else {}
+  closest_m = _finite_m(scene.get("closest_m"))
+  center_m = _finite_m(sectors.get("center"))
+  blocked = _blocked_ahead_of_person(
+    person_m=None, closest_m=closest_m, center_m=center_m, cfg=cfg
+  )
+  if blocked:
+    mem.search_dir = _freer_turn(sectors)
+    return _search_turn(mem, cfg, reason="search")
+  # Sweep one heading, then roll several times into the room, then the other way.
+  turn_n = max(1, cfg.search_turn_ticks)
+  fwd_n = max(1, cfg.search_forward_ticks)
+  cycle = turn_n + fwd_n
+  phase = (mem.lost_ticks - 1) % cycle
+  if phase == 0 and mem.lost_ticks > 1:
+    _flip_search_dir(mem)
+  if phase < turn_n:
+    return _search_turn(mem, cfg, reason="search")
+  return DriveNudge(
+    "forward",
+    speed=cfg.forward_speed,
+    dur_ms=cfg.search_forward_dur_ms,
+    reason="search",
+  )
 
 
 def plan(

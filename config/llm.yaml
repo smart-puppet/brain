@@ -12,9 +12,9 @@ llm:
   model_path: models/llm/Gemma-4-E2B-it-fraQtl-HiFi-Q4_K_M.gguf
   # Tried: models/llm/Qwen3.5-2B-Q4_K_M.gguf
   # Tried: models/llm/Qwen3.5-0.8B-Q4_K_M.gguf
-  n_ctx: 4096
+  n_ctx: 8192
   n_gpu_layers: -1
-  n_batch: 16
+  n_batch: 128
   n_threads: 1
   type_k: q4_0
   type_v: q4_0

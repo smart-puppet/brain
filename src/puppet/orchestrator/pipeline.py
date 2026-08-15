@@ -292,13 +292,16 @@ class Orchestrator:
             follow_stop_m=float(follow.get("stop_m", 0.9)),
             obstacle_m=float(follow.get("obstacle_m", 0.5)),
             sector_block_m=float(follow.get("sector_block_m", 0.7)),
-            forward_speed=int(follow.get("forward_speed", 90)),
+            forward_speed=int(follow.get("forward_speed", 105)),
             forward_dur_ms=int(follow.get("forward_dur_ms", 500)),
-            backward_speed=int(follow.get("backward_speed", follow.get("forward_speed", 90))),
+            backward_speed=int(follow.get("backward_speed", follow.get("forward_speed", 105))),
             backward_dur_ms=int(follow.get("backward_dur_ms", follow.get("forward_dur_ms", 500))),
-            turn_speed=int(follow.get("turn_speed", 110)),
+            turn_speed=int(follow.get("turn_speed", 125)),
             turn_dur_ms=int(follow.get("turn_dur_ms", 280)),
-            search_turn_dur_ms=int(follow.get("search_turn_dur_ms", 700)),
+            search_turn_dur_ms=int(follow.get("search_turn_dur_ms", 1800)),
+            search_turn_ticks=int(follow.get("search_turn_ticks", 4)),
+            search_forward_ticks=int(follow.get("search_forward_ticks", 4)),
+            search_forward_dur_ms=int(follow.get("search_forward_dur_ms", 1200)),
             lost_ticks_max=int(follow.get("lost_ticks", 2)),
             found_m=float(follow.get("found_m", 1.15)),
             seek_giveup_ticks=int(follow.get("seek_giveup_ticks", 24)),
@@ -484,6 +487,7 @@ class Orchestrator:
     self._worker.stop()
     self._tts_pipeline.stop()
     self._stop_tts_playback()
+    self._resume_stt_after_llm()
     self._playback_started_at = 0.0
     self._barge_clean_since = 0.0
     self._set_state(PipelineState.LISTENING)
@@ -972,11 +976,8 @@ class Orchestrator:
       logger.warning("Vision refresh failed: %s", result.get("error"))
 
   def _announce_play_event(self, reason: str) -> None:
-    """Speak a canned line when hide-and-seek ends (found / give up)."""
-    if reason not in ("found", "giveup"):
-      return
-    if self._reply_still_active():
-      logger.info("Play %s — skip voice, reply in progress", reason)
+    """Speak a canned line for play start/stop/found (Piper; no LLM)."""
+    if reason not in ("found", "giveup", "seek"):
       return
     from puppet.play.phrases import play_phrase
 
@@ -1019,7 +1020,7 @@ class Orchestrator:
       return
     play_cfg = self.config.get("play", {}) or {}
     follow = play_cfg.get("follow", {}) or {}
-    speed = int(follow.get("backward_speed", follow.get("forward_speed", 90)))
+    speed = int(follow.get("backward_speed", follow.get("forward_speed", 105)))
     dur_ms = int(follow.get("backward_dur_ms", follow.get("forward_dur_ms", 500)))
     result = self._drive.nudge("backward", dur_ms=dur_ms, speed=speed)
     if result.get("ok"):
@@ -1138,7 +1139,6 @@ class Orchestrator:
   def _on_llm_token(self, token: str) -> None:
     self._current_reply_text += token
     self._latency.mark_llm_token()
-    self._resume_stt_after_llm()
     self._trace.llm_generating()
     self._set_state(PipelineState.SPEAKING)
 
@@ -1380,6 +1380,10 @@ class Orchestrator:
       self._mark_echo_risk()
 
   def _should_process_stt(self) -> bool:
+    if self._stt_suspended:
+      if not self._respeaker_interrupt_active:
+        return False
+      self._resume_stt_after_llm()
     if self._respeaker_interrupt_active:
       return True
     if self.state in (PipelineState.LISTENING, PipelineState.THINKING):

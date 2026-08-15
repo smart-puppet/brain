@@ -201,6 +201,7 @@ class LlamaLlm(LlmBackend):
       "and add <<look>> as a hidden last line. "
       "To roll after you speak, add one hidden last line: <<follow>> or <<seek>> or <<stop>> or <<back>>. "
       "<<seek>> means you look for the child; you cannot hide. "
+      "Do not count to ten yourself; a separate voice does that, then you search the room. "
       "If BodyStatus already says following or searching, do not add <<follow>> or <<seek>> again. "
       "If they ask to stop, stay, or stand still, you MUST add <<stop>>. "
       "No tag for stories or normal chat. Never say the tags out loud.\n"

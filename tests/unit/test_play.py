@@ -125,6 +125,11 @@ def test_play_found_and_giveup_phrases() -> None:
   assert "Found" in play_phrase("found", "en")
   assert "trouve" in play_phrase("found", "fr").lower()
   assert "finde" in play_phrase("giveup", "de").lower()
+  assert "ten" in play_phrase("seek", "en").lower()
+  assert "dix" in play_phrase("seek", "fr").lower()
+  assert "zehn" in play_phrase("seek", "de").lower()
+  assert "stay" in play_phrase("idle", "en").lower()
+  assert "reverse" in play_phrase("back", "en").lower()
 
 
 def test_seek_found_when_close() -> None:
@@ -139,20 +144,44 @@ def test_seek_found_when_close() -> None:
 
 
 def test_seek_searches_when_no_person() -> None:
-  scene = {"closest_m": 2.0, "sectors": {}, "objects": []}
+  scene = {
+    "closest_m": 2.0,
+    "sectors": {"left": 2.0, "center": 2.0, "right": 2.0},
+    "objects": [],
+  }
+  mem = PlayMemory()
+  cfg = PlayConfig(
+    search_turn_ticks=3,
+    search_forward_ticks=3,
+    search_turn_dur_ms=1800,
+    search_forward_dur_ms=1200,
+  )
+  nudges = [plan_seek(scene, mem, cfg) for _ in range(6)]
+  assert [n.cmd for n in nudges[:3]] == ["turn_left", "turn_left", "turn_left"]
+  assert all(n.dur_ms == 1800 for n in nudges[:3])
+  assert [n.cmd for n in nudges[3:]] == ["forward", "forward", "forward"]
+  assert all(n.dur_ms == 1200 for n in nudges[3:])
+
+
+def test_seek_turns_when_path_blocked() -> None:
+  scene = {
+    "closest_m": 0.4,
+    "sectors": {"left": 1.5, "center": 0.4, "right": 0.6},
+    "objects": [],
+  }
   nudge = plan_seek(scene, PlayMemory(), PlayConfig())
-  assert nudge.reason == "search"
   assert nudge.cmd in ("turn_left", "turn_right")
+  assert nudge.reason == "search"
 
 
-def test_seek_does_not_roll_toward_voice() -> None:
+def test_seek_does_not_chase_voice() -> None:
   scene = {
     "closest_m": 1.5,
     "sectors": {"left": 1.5, "center": 1.5, "right": 1.5},
     "objects": [],
   }
-  nudge = plan_seek(scene, PlayMemory(), PlayConfig(), heading_error_deg=5)
-  assert nudge.cmd != "forward"
+  nudge = plan_seek(scene, PlayMemory(), PlayConfig(), heading_error_deg=90)
+  assert nudge.reason != "turn_to_voice"
   assert nudge.reason != "approach_voice"
 
 
@@ -167,17 +196,18 @@ def test_seek_gives_up_when_lost_too_long() -> None:
   assert nudge.reason == "giveup"
 
 
-def test_follow_lost_waits_instead_of_hunting() -> None:
+def test_follow_lost_turns_to_look() -> None:
   scene = {
     "closest_m": 1.5,
     "sectors": {"left": 1.5, "center": 1.5, "right": 1.5},
     "objects": [],
   }
   mem = PlayMemory()
-  cfg = PlayConfig()
-  with_heading = plan_follow(scene, mem, cfg, heading_error_deg=90)
-  assert with_heading.cmd == "idle"
-  assert with_heading.reason == "lost"
-  facing = plan_follow(scene, PlayMemory(), cfg, heading_error_deg=5)
-  assert facing.cmd == "idle"
-  assert facing.reason == "lost"
+  cfg = PlayConfig(lost_ticks_max=2, search_turn_ticks=3)
+  first = plan_follow(scene, mem, cfg, heading_error_deg=90)
+  assert first.cmd == "idle"
+  assert first.reason == "lost"
+  plan_follow(scene, mem, cfg, heading_error_deg=90)
+  scans = [plan_follow(scene, mem, cfg, heading_error_deg=90).cmd for _ in range(4)]
+  assert scans[:3] == ["turn_left", "turn_left", "turn_left"]
+  assert scans[3] == "turn_right"

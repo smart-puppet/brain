@@ -8,6 +8,6 @@ stt:
     strip_lang_tags: true
   n_threads: 1
   n_batch: 1
-  suspend_during_llm: false
+  suspend_during_llm: true
   warmup: true
   warmup_ms: 1500
