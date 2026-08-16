@@ -204,11 +204,25 @@ _VISION_QUESTION_RE = re.compile(
   r"qu.?est[- ]ce\s+que\s+tu\s+vois|regarde|"
   r"was\s+siehst|schau\s+mal)"
 )
+_VISION_FOLLOWUP_RE = re.compile(
+  r"(?iu)^\s*(?:"
+  r"(?:et\s+)?maintenant|"
+  r"(?:and\s+)?now|"
+  r"(?:und\s+)?jetzt|"
+  r"encore|again|"
+  r"et\s+l[aà]"
+  r")[\s.!?]*$"
+)
 
 
 def looks_like_vision_question(text: str) -> bool:
   """True when the child asked what is in front of the camera."""
   return bool(_VISION_QUESTION_RE.search(text or ""))
+
+
+def looks_like_vision_followup(text: str) -> bool:
+  """True for a short 'and now?' after a see-question (needs a fresh capture)."""
+  return bool(_VISION_FOLLOWUP_RE.match((text or "").strip()))
 
 
 def should_force_object_glimpse(

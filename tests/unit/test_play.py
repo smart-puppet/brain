@@ -1,4 +1,10 @@
-from puppet.play.actions import parse_robot_actions, strip_robot_actions, user_asked_to_stop
+from puppet.play.actions import (
+  parse_robot_actions,
+  strip_robot_actions,
+  user_asked_to_follow,
+  user_asked_to_seek,
+  user_asked_to_stop,
+)
 from puppet.play.phrases import play_phrase
 from puppet.play.policy import PlayConfig, PlayMemory, plan_follow, plan_seek
 
@@ -18,12 +24,17 @@ def test_llm_back_tag() -> None:
 
 
 def test_looks_like_vision_question() -> None:
-  from puppet.mqtt.scene import looks_like_vision_question
+  from puppet.mqtt.scene import looks_like_vision_followup, looks_like_vision_question
 
   assert looks_like_vision_question("que vois-tu?")
   assert looks_like_vision_question("What do you see?")
   assert looks_like_vision_question("Was siehst du?")
+  assert looks_like_vision_question("Est-ce que tu vois maintenant?")
   assert not looks_like_vision_question("Follow me")
+  assert looks_like_vision_followup("Et maintenant.")
+  assert looks_like_vision_followup("and now?")
+  assert looks_like_vision_followup("Jetzt")
+  assert not looks_like_vision_followup("Qu'est-ce que tu veux faire maintenant ?")
 
 
 def test_glimpse_not_forced_on_reverse() -> None:
@@ -66,6 +77,19 @@ def test_user_asked_to_stop() -> None:
   assert user_asked_to_stop("Arrête !")
   assert not user_asked_to_stop("Follow me")
   assert not user_asked_to_stop("What is a stopwatch?")
+
+
+def test_user_asked_to_follow_or_seek() -> None:
+  assert user_asked_to_follow("Suis-moi !")
+  assert user_asked_to_follow("Follow me")
+  assert user_asked_to_follow("Komm mit")
+  assert user_asked_to_follow("Viens ici")
+  assert not user_asked_to_follow("Et maintenant.")
+  assert not user_asked_to_follow("J'aime bien jouer.")
+  assert not user_asked_to_follow("Je viens de rentrer")
+  assert user_asked_to_seek("On joue à cache-cache ?")
+  assert user_asked_to_seek("Let's play hide-and-seek")
+  assert not user_asked_to_seek("J'aime bien jouer.")
 
 
 def test_strip_robot_actions_leaves_chat() -> None:

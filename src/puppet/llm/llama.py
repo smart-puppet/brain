@@ -17,6 +17,27 @@ from puppet.llm.perf import (
 
 logger = logging.getLogger(__name__)
 
+# Frozen across turns so llama.cpp can reuse the KV prefix. Mutable CameraJSON
+# / BodyStatus are appended only to the current user message.
+_VISION_INSTRUCTIONS = (
+  "Private robot state may appear at the end of the child's last message "
+  "(BodyStatus / CameraJSON). Never copy or read it aloud. "
+  "Never output CameraJSON, SEEING, PATH, RANGES, Vision, or meter readings. "
+  "Object names in CameraJSON are always English (YOLO labels). "
+  "When you speak, translate every object name into the child's spoken language "
+  "(e.g. French: bed→lit, chair→chaise, plant→plante; German: bed→Bett). "
+  "If objects is non-empty and they asked what you see, answer in your own short kid words. "
+  "If they asked what you see and objects is empty or stale_s is large, say you are looking "
+  "and add <<look>> as a hidden last line. "
+  "Only add <<follow>> or <<seek>> when the child asked you to follow, come closer, or play hide-and-seek. "
+  "Only add <<back>> when they asked you to reverse. "
+  "<<seek>> means you look for the child; you cannot hide. "
+  "Do not count to ten yourself; a separate voice does that, then you search the room. "
+  "If BodyStatus already says following or searching, do not add <<follow>> or <<seek>> again. "
+  "If they ask to stop, stay, or stand still, you MUST add <<stop>>. "
+  "No tag for stories or normal chat. Never say the tags out loud."
+)
+
 _TERNARY_HINT = (
   "Ternary-Bonsai Q2_0 needs llama-cpp-python built from the PrismML fork. "
   "Run: ./scripts/build_llama_prism.sh and set llm.binding: prism in config/llm.yaml "
@@ -135,8 +156,9 @@ class LlamaLlm(LlmBackend):
   def warmup(self, *, max_tokens: int = 8, prompt: str = "Hi", stream: bool = True) -> None:
     """Run a tiny completion so the first real reply avoids cold-start latency."""
     messages: list[dict[str, str]] = []
-    if self._system_prompt:
-      messages.append({"role": "system", "content": self._system_prompt})
+    system = self._frozen_system()
+    if system:
+      messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
     started = time.monotonic()
     try:
@@ -173,51 +195,46 @@ class LlamaLlm(LlmBackend):
     return self._last_perf
 
   def set_vision_hint_fn(self, fn) -> None:
-    """Optional callable returning a short vision context line for the system prompt."""
+    """Optional callable returning BodyStatus / CameraJSON for the current user turn."""
     self._vision_hint_fn = fn
 
   def set_vision_refresh_fn(self, fn) -> None:
     """Optional callable invoked before each reply to request a fresh eyes capture."""
     self._vision_refresh_fn = fn
 
-  def _system_with_vision(self) -> str:
+  def _frozen_system(self) -> str:
+    """Persona + static robot rules. Must not change between turns (KV prefix)."""
     base = self._system_prompt
-    if not self._vision_hint_fn:
-      return base
-    try:
-      line = (self._vision_hint_fn() or "").strip()
-    except Exception:
-      return base
-    if not line:
-      return base
-    vision_block = (
-      "Private robot state. Never copy or read it aloud. "
-      "Never output CameraJSON, SEEING, PATH, RANGES, Vision, or meter readings. "
-      "Object names in CameraJSON are always English (YOLO labels). "
-      "When you speak, translate every object name into the child's spoken language "
-      "(e.g. French: bed→lit, chair→chaise, plant→plante; German: bed→Bett). "
-      "If objects is non-empty and they asked what you see, answer in your own short kid words. "
-      "If they asked what you see and objects is empty or stale_s is large, say you are looking "
-      "and add <<look>> as a hidden last line. "
-      "To roll after you speak, add one hidden last line: <<follow>> or <<seek>> or <<stop>> or <<back>>. "
-      "<<seek>> means you look for the child; you cannot hide. "
-      "Do not count to ten yourself; a separate voice does that, then you search the room. "
-      "If BodyStatus already says following or searching, do not add <<follow>> or <<seek>> again. "
-      "If they ask to stop, stay, or stand still, you MUST add <<stop>>. "
-      "No tag for stories or normal chat. Never say the tags out loud.\n"
-      f"{line}"
-    )
     if base:
-      return f"{base}\n\n{vision_block}"
-    return vision_block
+      return f"{base}\n\n{_VISION_INSTRUCTIONS}"
+    return _VISION_INSTRUCTIONS
+
+  def _mutable_robot_state(self) -> str:
+    if not self._vision_hint_fn:
+      return ""
+    try:
+      return (self._vision_hint_fn() or "").strip()
+    except Exception:
+      return ""
 
   def _build_messages(self, conversation: Conversation) -> list[dict[str, str]]:
     messages: list[dict[str, str]] = []
-    system = self._system_with_vision()
+    system = self._frozen_system()
     if system:
       messages.append({"role": "system", "content": system})
     for msg in conversation.prompt_messages():
       messages.append({"role": msg.role, "content": msg.content})
+    state = self._mutable_robot_state()
+    if not state:
+      return messages
+    blob = f"Private: {state}"
+    for i in range(len(messages) - 1, -1, -1):
+      if messages[i]["role"] == "user":
+        messages[i] = {
+          "role": "user",
+          "content": f"{messages[i]['content']}\n\n{blob}",
+        }
+        break
     return messages
 
   def stream_reply(self, conversation: Conversation) -> Iterator[str]:

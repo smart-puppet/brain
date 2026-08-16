@@ -109,11 +109,13 @@ class Orchestrator:
 
     from puppet.mqtt.scene import (
       looks_like_vision_dump,
+      looks_like_vision_followup,
       looks_like_vision_question,
       should_force_object_glimpse,
     )
 
     self._looks_like_vision_dump = looks_like_vision_dump
+    self._looks_like_vision_followup = looks_like_vision_followup
     self._looks_like_vision_question = looks_like_vision_question
     self._should_force_object_glimpse = should_force_object_glimpse
     if not hasattr(self, "_capture_every_reply"):
@@ -337,6 +339,7 @@ class Orchestrator:
     self._vision_lang = str((config.get("language") or {}).get("active") or "en")
     self._block_vision_tts = False
     self._defer_vision_tts = False
+    self._last_vision_turn = False
     self._vision_fresh_this_turn = False
     from puppet.play.actions import strip_robot_actions
 
@@ -873,7 +876,11 @@ class Orchestrator:
     self._current_reply_text = ""
     self._block_vision_tts = False
     prompt = self.conversation.draft_user.strip()
-    self._defer_vision_tts = self._looks_like_vision_question(prompt)
+    vision = self._looks_like_vision_question(prompt)
+    if not vision and self._last_vision_turn and self._looks_like_vision_followup(prompt):
+      vision = True
+    self._defer_vision_tts = vision
+    self._last_vision_turn = vision
     self._vision_fresh_this_turn = False
     self._reply_in_progress = True
     self._suspend_stt_for_llm()
@@ -920,7 +927,7 @@ class Orchestrator:
     return f"BodyStatus: {labels.get(mode, 'standing still')}. Motion={motion}."
 
   def _llm_body_context(self) -> str:
-    """Private system-prompt lines: wheel state + optional cached CameraJSON."""
+    """Mutable robot state for the current user turn (not the frozen system prompt)."""
     parts = [self._body_status_line()]
     for ingest in (self._scene_ingest, self._play_scene):
       if ingest is None or not ingest.inject_context:
@@ -1090,9 +1097,7 @@ class Orchestrator:
       out = {"ok": True, **scene, "_age_s": age, "_cached": True}
       return out
     if capture_timeout_s <= 0:
-      if scene:
-        return {"ok": True, **scene, "_age_s": age, "_cached": True, "stale": True}
-      return {"ok": False, "error": "no cached scene"}
+      return {"ok": False, "error": "no fresh cached scene"}
     # Short wait only — a long capture here freezes the mic/STT loop.
     result = ingest.request_capture(timeout_s=capture_timeout_s)
     if result.get("ok"):
@@ -1179,6 +1184,15 @@ class Orchestrator:
       (a for a in reversed(actions) if a in ("follow", "seek", "idle", "back")),
       None,
     )
+    user_prompt = (self.conversation.draft_user or "").strip()
+    from puppet.play.actions import user_asked_to_follow, user_asked_to_seek
+
+    if motion == "follow" and not user_asked_to_follow(user_prompt):
+      logger.info("Ignoring <<follow>> (user did not ask to follow)")
+      motion = None
+    elif motion == "seek" and not user_asked_to_seek(user_prompt):
+      logger.info("Ignoring <<seek>> (user did not ask to play hide-and-seek)")
+      motion = None
     if motion == "back":
       self._apply_llm_backup()
     elif motion is not None:
