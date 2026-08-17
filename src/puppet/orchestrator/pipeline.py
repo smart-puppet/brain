@@ -162,16 +162,22 @@ class Orchestrator:
     self._echo_quiet_until = 0.0
     self._await_fresh_since = 0.0
     self._reply_in_progress = False
+    self._respeaker_cfg = audio_cfg.get("respeaker", {}) or {}
+    self._pause_tts_on_speech = bool(self._respeaker_cfg.get("pause_tts_on_speech", False))
     self._respeaker_interrupt_enabled = bool(
-      audio_cfg.get("respeaker", {}).get("pause_tts_on_speech", True)
+      self._respeaker_cfg.get("interrupt_while_speaking", True)
     )
     self._respeaker_interrupt_timeout_s = (
-      max(100, int(audio_cfg.get("respeaker", {}).get("interrupt_timeout_ms", 900))) / 1000.0
+      max(100, int(self._respeaker_cfg.get("interrupt_timeout_ms", 1800))) / 1000.0
     )
-    self._respeaker_interrupt_min_chars = int(puppet_cfg.get("interrupt_min_chars", 2))
+    self._respeaker_interrupt_holdoff_s = (
+      max(0, int(self._respeaker_cfg.get("interrupt_holdoff_ms", 400))) / 1000.0
+    )
+    self._respeaker_interrupt_min_chars = int(puppet_cfg.get("interrupt_min_chars", 4))
     self._respeaker_interrupt_active = False
     self._respeaker_interrupt_heard_text = False
     self._respeaker_interrupt_started_at = 0.0
+    self._interrupt_holdoff_since = 0.0
     self._current_reply_text = ""
 
     stt_cfg = config.get("stt", {})
@@ -540,6 +546,7 @@ class Orchestrator:
     self._tts_playback_active = False
     if self.state == PipelineState.SPEAKING:
       self._set_state(PipelineState.THINKING)
+    self._interrupt_holdoff_since = 0.0
     logger.info("Speech detected during reply — pausing TTS pending STT confirmation")
 
   def _resume_reply_after_noise_probe(self) -> None:
@@ -548,6 +555,7 @@ class Orchestrator:
     self._respeaker_interrupt_active = False
     self._respeaker_interrupt_heard_text = False
     self._respeaker_interrupt_started_at = 0.0
+    self._interrupt_holdoff_since = 0.0
     self._tts_pipeline.resume()
     if self._playback is not None:
       self._playback.resume()
@@ -572,6 +580,7 @@ class Orchestrator:
     self._respeaker_interrupt_active = False
     self._respeaker_interrupt_heard_text = False
     self._respeaker_interrupt_started_at = 0.0
+    self._interrupt_holdoff_since = 0.0
     self._set_state(PipelineState.LISTENING)
     self.bus.emit("playback_cancelled")
 
@@ -768,7 +777,10 @@ class Orchestrator:
   def _should_feed_stt(self) -> bool:
     if self._respeaker_interrupt_active:
       return True
-    # Never transcribe during playback — open mic + speaker makes STT hear the bot.
+    if self._respeaker_interrupt_enabled and self._reply_still_active():
+      return True
+    # Never transcribe during playback unless interrupt-while-speaking is on —
+    # open mic + speaker makes STT hear the bot.
     if self.state == PipelineState.SPEAKING:
       return False
     if self.state == PipelineState.LISTENING:
@@ -783,9 +795,32 @@ class Orchestrator:
       return True
     return self._speech_active or self._vad.is_speech
 
+  def _maybe_confirm_user_interrupt(self, text: str) -> bool:
+    """True if STT during a reply is the child, not Piper echoing into the mic."""
+    if not self._respeaker_interrupt_enabled or not self._reply_still_active():
+      return False
+    if not text.strip():
+      return False
+    if self._text_looks_like_tts_echo(text):
+      logger.debug("Ignoring interrupt STT that matches TTS: %r", text)
+      return False
+    draft = self.conversation.draft_user.strip()
+    if self._text_looks_like_tts_echo(draft):
+      logger.debug("Ignoring interrupt draft that matches TTS: %r", draft)
+      return False
+    if len(draft) < self._respeaker_interrupt_min_chars:
+      return False
+    self._cancel_reply_for_user_interrupt()
+    return True
+
   def _on_stt_partial(self, text: str) -> None:
     if self._echo_suppresses_stt_draft():
       return
+
+    if self._respeaker_interrupt_enabled and self._reply_still_active() and text.strip():
+      if self._text_looks_like_tts_echo(text):
+        logger.debug("Ignoring interrupt STT that matches TTS: %r", text)
+        return
 
     if text.strip():
       self._latency.mark_stt_partial()
@@ -794,10 +829,12 @@ class Orchestrator:
     self._trace.stt_partial(text, self.conversation.draft_user)
     self.bus.emit("transcript_partial", text=text, draft=self.conversation.draft_user)
 
+    if self._maybe_confirm_user_interrupt(text):
+      return
     if self._respeaker_interrupt_active and text.strip():
       self._respeaker_interrupt_heard_text = True
-      if len(self.conversation.draft_user.strip()) >= self._respeaker_interrupt_min_chars:
-        self._cancel_reply_for_user_interrupt()
+      return
+    if self._respeaker_interrupt_enabled and self._reply_still_active():
       return
 
     if self._restart_on_partial and self._generation_active():
@@ -884,6 +921,9 @@ class Orchestrator:
     self._start_generation()
 
   def _suspend_stt_for_llm(self) -> None:
+    # Keep decoding during a reply so the child can interrupt a story.
+    if self._respeaker_interrupt_enabled:
+      return
     if not self._stt_suspend_during_llm or self._stt_suspended:
       return
     suspend = getattr(self.stt, "suspend", None)
@@ -1583,11 +1623,12 @@ class Orchestrator:
       self._mark_echo_risk()
 
   def _should_process_stt(self) -> bool:
+    want_interrupt = self._respeaker_interrupt_enabled and self._reply_still_active()
     if self._stt_suspended:
-      if not self._respeaker_interrupt_active:
+      if not self._respeaker_interrupt_active and not want_interrupt:
         return False
       self._resume_stt_after_llm()
-    if self._respeaker_interrupt_active:
+    if self._respeaker_interrupt_active or want_interrupt:
       return True
     if self.state in (PipelineState.LISTENING, PipelineState.THINKING):
       return self._should_feed_stt()
@@ -1599,12 +1640,21 @@ class Orchestrator:
     self._respeaker_doa.poll(speech_active=self._user_speaking_now())
     self._unlock_fresh_speech()
     if (
-      self._respeaker_interrupt_enabled
+      self._pause_tts_on_speech
+      and self._respeaker_interrupt_enabled
       and self._reply_still_active()
       and not self._respeaker_interrupt_active
       and self._user_speaking_now()
     ):
-      self._pause_reply_for_interrupt_probe()
+      now = time.monotonic()
+      if self._interrupt_holdoff_since <= 0:
+        self._interrupt_holdoff_since = now
+      if now - self._interrupt_holdoff_since >= self._respeaker_interrupt_holdoff_s:
+        self._interrupt_holdoff_since = 0.0
+        self._pause_reply_for_interrupt_probe()
+    else:
+      if not self._respeaker_interrupt_active:
+        self._interrupt_holdoff_since = 0.0
     if self._respeaker_interrupt_active:
       if self._reply_still_active() and self._user_speaking_now():
         self._respeaker_interrupt_started_at = time.monotonic()

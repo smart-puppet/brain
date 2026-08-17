@@ -6,8 +6,10 @@ audio:
     usb_reset_on_start: always   # auto | always | never
     reset_method: all            # firmware | usb_port | usb_cycle | both | all
     settle_ms: 3000
-    pause_tts_on_speech: true    # pause reply immediately when speech detected
-    interrupt_timeout_ms: 400      # resume if no STT text in this window (noise)
+    pause_tts_on_speech: false   # VAD-pause chopped Piper on the robot's own voice
+    interrupt_while_speaking: true  # cancel a reply when STT hears the user (not echo)
+    interrupt_timeout_ms: 1800     # if VAD-pause is on: wait ≥1 Parakeet chunk
+    interrupt_holdoff_ms: 400      # if VAD-pause is on: ignore short bleed spikes
     doa_debug: true              # true + logging.level DEBUG → direction logs
     doa_poll_ms: 250
     # Auto-turn chassis toward the speaker using DoA (needs drive MQTT bridge).
@@ -26,4 +28,4 @@ vad:
 
 puppet:
   barge_in_enabled: false
-  interrupt_min_chars: 2
+  interrupt_min_chars: 4

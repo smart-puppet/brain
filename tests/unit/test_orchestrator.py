@@ -76,6 +76,7 @@ class FakePlayback:
 
   def stop(self) -> None:
     self.stop_calls += 1
+    self._busy = False
 
   def pause(self) -> None:
     self.pause_calls += 1
@@ -674,6 +675,55 @@ def test_respeaker_interrupt_feeds_stt_while_speaking() -> None:
   orch._handle_audio_chunk(np.zeros(320, dtype=np.float32), 16000)
 
   assert fake_stt.fed_chunks == 1
+
+
+def test_stt_is_fed_during_speaking_without_vad_pause() -> None:
+  cfg = _base_cfg()
+  fake_playback = FakePlayback(busy=True)
+  orch = Orchestrator(cfg, stt=FakeStt(), llm=FakeLlm(), tts=FakeTts())
+  orch._tts_pipeline = fake_playback  # type: ignore[assignment]
+  orch._worker._phrase_playback = fake_playback
+  fake_stt = orch.stt
+  assert isinstance(fake_stt, FakeStt)
+  orch._reply_in_progress = True
+  orch._set_state(PipelineState.SPEAKING)
+
+  orch._handle_audio_chunk(np.zeros(320, dtype=np.float32), 16000)
+
+  assert fake_stt.fed_chunks == 1
+  assert fake_playback.pause_calls == 0
+  assert not orch._respeaker_interrupt_active
+
+
+def test_stt_stop_during_story_cancels_reply() -> None:
+  cfg = _base_cfg()
+  orch = _with_fake_playback(
+    Orchestrator(cfg, stt=FakeStt(), llm=FakeLlm(), tts=FakeTts())
+  )
+  orch._reply_in_progress = True
+  orch._set_state(PipelineState.SPEAKING)
+  orch._spoken_reply_corpus = "Once upon a time a princess lived in a castle."
+  orch._current_reply_text = "Once upon a time a princess lived in a castle."
+
+  orch._on_stt_partial("stop please")
+
+  assert not orch._reply_in_progress
+  assert orch.conversation.draft_user == "stop please"
+
+
+def test_stt_story_echo_does_not_cancel_reply() -> None:
+  cfg = _base_cfg()
+  orch = _with_fake_playback(
+    Orchestrator(cfg, stt=FakeStt(), llm=FakeLlm(), tts=FakeTts())
+  )
+  orch._reply_in_progress = True
+  orch._set_state(PipelineState.SPEAKING)
+  orch._spoken_reply_corpus = "Once upon a time a princess lived in a castle."
+
+  orch._on_stt_partial("Once upon a time a princess")
+
+  assert orch._reply_in_progress
+  assert orch.conversation.draft_user == ""
 
 
 def test_respeaker_interrupt_cancels_and_keeps_partial_assistant_context() -> None:

@@ -37,11 +37,10 @@ See `config/profiles/respeaker.yaml` for USB reset and interrupt settings.
 
 `usb_cycle` toggles Linux sysfs `authorized` (0→1), which is often closer to a physical unplug/replug than a plain USBDEVFS reset.
 
-During a reply on ReSpeaker, Puppet now uses a two-step interruption policy:
-
-1. Pause TTS immediately when speech is detected.
-2. If STT decodes text (`puppet.interrupt_min_chars`), cancel the current generation and continue with appended user text.
-   If no text is decoded before `audio.respeaker.interrupt_timeout_ms`, treat it as noise and resume playback.
+During a reply on ReSpeaker, Puppet listens with STT while Piper talks (hardware AEC).
+It cancels the reply only when decoded text does **not** match the current TTS phrase
+(`puppet.interrupt_min_chars`). VAD no longer pauses TTS on the robot's own voice.
+`pause_tts_on_speech: true` is the old probe (pause immediately, resume if no STT).
 
 #### Linux permissions for software reset (important)
 
@@ -129,7 +128,7 @@ If you disable VAD (`vad.enabled: false`), speech detection falls back to mic RM
 | `stt_tail_ms` | 1000 | Keep feeding STT after VAD end (captures trailing words) |
 | `min_user_chars` | 3 | Minimum draft length to trigger LLM |
 | `restart_on_partial` | true | Restart LLM when new STT words arrive during generation |
-| `interrupt_min_chars` | 2 | STT length to treat interrupt as real speech |
+| `interrupt_min_chars` | 4 | STT length to treat interrupt as real speech |
 | `interrupt_eval_ms` | 700 | Window to capture interrupt speech |
 
 After each completed reply, `run_puppet` logs one INFO line with a latency bar and LLM perf (same style as `test_llm.py`):
