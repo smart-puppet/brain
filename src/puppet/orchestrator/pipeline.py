@@ -1112,7 +1112,7 @@ class Orchestrator:
     chunks: list[str] = []
     try:
       for token in self.llm.stream_reply(self.conversation):
-        if self._respeaker_interrupt_active:
+        if not self._reply_in_progress:
           logger.info("Look describe pass interrupted")
           return ""
         chunks.append(token)
@@ -1334,15 +1334,25 @@ class Orchestrator:
         looked=looked or "look" in actions,
       )
 
-    if (
-      looked
-      and not replaced
-      and self._looks_like_looking_bridge(spoken)
-      and not self._respeaker_interrupt_active
-    ):
-      described = self._describe_look_scene()
-      if described:
-        spoken = f"{spoken} {described}".strip()
+    if looked and not replaced and self._reply_in_progress:
+      mentions = ingest is not None and ingest.reply_mentions_objects(
+        spoken, self._vision_lang
+      )
+      if not mentions:
+        # Echo of "I am looking" often trips the barge-in probe and would
+        # otherwise skip the object sentence.
+        if self._respeaker_interrupt_active:
+          self._resume_reply_after_noise_probe()
+        described = self._describe_look_scene()
+        if described:
+          spoken = f"{spoken} {described}".strip() if spoken else described
+        elif ingest is not None:
+          glimpse = ingest.spoken_glimpse(self._vision_lang)
+          if glimpse:
+            logger.info("Look describe empty; speaking glimpse")
+            self._tts_pipeline.submit(glimpse)
+            self._tts_pipeline.wait_done()
+            spoken = f"{spoken} {glimpse}".strip() if spoken else glimpse
 
     for item in (self._scene_ingest, self._play_scene):
       if item is not None:
