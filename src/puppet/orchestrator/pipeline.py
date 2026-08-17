@@ -1037,7 +1037,11 @@ class Orchestrator:
       return spoken
     from puppet.play.phrases import play_phrase
 
-    if motion in ("follow", "seek", "back", "idle"):
+    # Seek already has a 1-10 announce from the play supervisor. Filling silence
+    # with the same phrase makes Piper count twice.
+    if motion == "seek":
+      return spoken
+    if motion in ("follow", "back", "idle"):
       kind = motion
     elif looked:
       return spoken
