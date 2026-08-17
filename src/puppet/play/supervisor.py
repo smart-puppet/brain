@@ -300,13 +300,14 @@ class PlaySupervisor:
       with self._lock:
         self._status = status
       logger.info(
-        "Play %s → %s (%s) person=%s/%s closest=%s",
+        "Play %s → %s (%s) person=%s/%s closest=%s floor=%s",
         mode_now,
         nudge.cmd,
         nudge.reason,
         person.get("bearing"),
         person.get("dist_m"),
         result.get("closest_m"),
+        result.get("floor_ahead_pct"),
       )
       self._apply(nudge)
       self._publish_status()

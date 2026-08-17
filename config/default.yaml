@@ -52,16 +52,19 @@ play:
     obstacle_m: 0.5           # hard stop if something else is closer
     sector_block_m: 0.7
     forward_speed: 105
-    forward_dur_ms: 500
+    forward_dur_ms: 700
     backward_speed: 105
     backward_dur_ms: 500
     turn_speed: 125           # follow / face-voice rotation (Eye slider)
     seek_turn_speed: 125      # hide-and-seek search rotation (Eye slider)
     turn_dur_ms: 280
-    search_turn_dur_ms: 1800  # finish a real pivot; several in a row before rolling
-    search_turn_ticks: 4
-    search_forward_ticks: 4   # rolls after each sweep so it actually covers the room
-    search_forward_dur_ms: 1200
+    search_turn_dur_ms: 500   # one glance, then roll (not a long spin)
+    search_turn_ticks: 1
+    search_forward_ticks: 1   # turn → look/roll → turn the other way → roll
+    search_forward_dur_ms: 1100
     lost_ticks: 2
     found_m: 1.15             # hide-and-seek: stop and idle when this close
     seek_giveup_ticks: 40     # lost captures while rolling/turning → give up
+    alive_jitter: 0.25        # 0 = metronome; small wander without 200ms twitches
+    unstick_after: 2          # reverse after this many blocked ticks (or immediately if both sides tight)
+    min_pulse_ms: 320         # floor on jittered follow/seek pulses

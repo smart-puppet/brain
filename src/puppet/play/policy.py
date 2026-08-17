@@ -7,6 +7,7 @@ obstacle (eyes marks people as no-go in the costmap).
 
 from __future__ import annotations
 
+import random
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -17,6 +18,7 @@ class PlayConfig:
   obstacle_m: float = 0.5
   sector_block_m: float = 0.7
   person_margin_m: float = 0.2
+  floor_block_pct: float = 0.12
   forward_speed: int = 105
   forward_dur_ms: int = 500
   backward_speed: int = 105
@@ -24,20 +26,31 @@ class PlayConfig:
   turn_speed: int = 125
   seek_turn_speed: int = 125
   turn_dur_ms: int = 280
-  search_turn_dur_ms: int = 1800
-  search_turn_ticks: int = 4
-  search_forward_ticks: int = 4
-  search_forward_dur_ms: int = 1200
+  search_turn_dur_ms: int = 500
+  search_turn_ticks: int = 1
+  search_forward_ticks: int = 1
+  search_forward_dur_ms: int = 900
   lost_ticks_max: int = 2
   found_m: float = 1.15
   seek_giveup_ticks: int = 40
   doa_deadband_deg: float = 25.0
+  # 0 = mechanical (tests). YAML default ~0.35 = livelier wander; speeds stay as set on Eye.
+  alive_jitter: float = 0.0
+  unstick_after: int = 2
+  # Jittered pulses shorter than this feel like twitching instead of rolling.
+  min_pulse_ms: int = 320
 
 
 @dataclass
 class PlayMemory:
   lost_ticks: int = 0
   search_dir: str = "turn_left"
+  cycle_turn_n: int = 0
+  cycle_fwd_n: int = 0
+  stuck_ticks: int = 0
+  last_stuck: str = ""
+  wander_i: int = 0
+  rng: Any = field(default=None, repr=False, compare=False)
 
 
 @dataclass(frozen=True)
@@ -61,6 +74,22 @@ def _finite_m(value: Any) -> Optional[float]:
   return dist
 
 
+def _rng(mem: PlayMemory) -> random.Random:
+  if mem.rng is None:
+    mem.rng = random.Random()
+  return mem.rng
+
+
+def _dur(cfg: PlayConfig, base_ms: int, mem: PlayMemory) -> int:
+  """Jitter pulse length, not wheel speed (Eye sliders stay in charge)."""
+  base = max(80, int(base_ms))
+  if cfg.alive_jitter <= 0:
+    return base
+  lo = max(0.55, 1.0 - cfg.alive_jitter)
+  hi = 1.0 + min(0.55, cfg.alive_jitter)
+  return max(max(80, cfg.min_pulse_ms), int(base * _rng(mem).uniform(lo, hi)))
+
+
 def nearest_person(scene: dict[str, Any]) -> Optional[dict[str, Any]]:
   objects = scene.get("objects") or []
   if not isinstance(objects, list):
@@ -79,9 +108,16 @@ def nearest_person(scene: dict[str, Any]) -> Optional[dict[str, Any]]:
   return people[0][1]
 
 
-def _freer_turn(sectors: dict[str, Any]) -> str:
+def _freer_turn(
+  sectors: dict[str, Any],
+  mem: Optional[PlayMemory] = None,
+  *,
+  jitter: float = 0.0,
+) -> str:
   left = _finite_m(sectors.get("left")) or 0.0
   right = _finite_m(sectors.get("right")) or 0.0
+  if abs(left - right) < 0.25 and mem is not None and jitter > 0:
+    return "turn_left" if _rng(mem).random() < 0.5 else "turn_right"
   return "turn_left" if left >= right else "turn_right"
 
 
@@ -91,6 +127,7 @@ def _blocked_ahead_of_person(
   closest_m: Optional[float],
   center_m: Optional[float],
   cfg: PlayConfig,
+  floor_ahead_pct: Optional[float] = None,
 ) -> bool:
   """True when something other than the person sits in the path."""
   if closest_m is not None and closest_m < cfg.obstacle_m:
@@ -99,7 +136,78 @@ def _blocked_ahead_of_person(
   if center_m is not None and center_m < cfg.sector_block_m:
     if person_m is None or center_m + cfg.person_margin_m < person_m:
       return True
+  if (
+    floor_ahead_pct is not None
+    and floor_ahead_pct < cfg.floor_block_pct
+    and (person_m is None or person_m > cfg.follow_stop_m + 0.4)
+  ):
+    return True
   return False
+
+
+def _clear_stuck(mem: PlayMemory) -> None:
+  mem.stuck_ticks = 0
+  mem.last_stuck = ""
+
+
+def _both_sides_tight(sectors: dict[str, Any], cfg: PlayConfig) -> bool:
+  lim = max(cfg.sector_block_m, cfg.obstacle_m)
+  left = _finite_m(sectors.get("left"))
+  right = _finite_m(sectors.get("right"))
+  # Missing range is unknown, not a wall — wood-floor NaNs used to reverse forever.
+  return (left is not None and left < lim) and (right is not None and right < lim)
+
+
+def _unstick(
+  mem: PlayMemory,
+  cfg: PlayConfig,
+  sectors: dict[str, Any],
+  *,
+  person: Optional[dict[str, Any]] = None,
+  turn_reason: str = "avoid",
+) -> DriveNudge:
+  """Back up and/or turn when forward is blocked, instead of sitting still."""
+  mem.stuck_ticks += 1
+  tight = _both_sides_tight(sectors, cfg)
+  do_back = (
+    mem.last_stuck != "back"
+    and (tight or mem.last_stuck == "turn" or mem.stuck_ticks >= max(1, cfg.unstick_after))
+  )
+  if do_back:
+    mem.last_stuck = "back"
+    return DriveNudge(
+      "backward",
+      speed=cfg.backward_speed,
+      dur_ms=_dur(cfg, cfg.backward_dur_ms, mem),
+      reason="unstick",
+      person=person,
+    )
+  mem.last_stuck = "turn"
+  if mem.stuck_ticks > 1:
+    _flip_search_dir(mem)
+  else:
+    mem.search_dir = _freer_turn(sectors, mem, jitter=cfg.alive_jitter)
+  speed = cfg.seek_turn_speed if turn_reason == "search" else cfg.turn_speed
+  if mem.stuck_ticks > 1 or tight:
+    base_dur = max(cfg.turn_dur_ms, int(cfg.search_turn_dur_ms * 0.4))
+    reason = "unstick"
+  else:
+    base_dur = cfg.turn_dur_ms if turn_reason != "search" else cfg.search_turn_dur_ms
+    reason = turn_reason
+  return DriveNudge(
+    mem.search_dir,
+    speed=speed,
+    dur_ms=_dur(cfg, base_dur, mem),
+    reason=reason,
+    person=person,
+  )
+
+
+def _floor_pct(scene: dict[str, Any]) -> Optional[float]:
+  value = scene.get("floor_ahead_pct")
+  if isinstance(value, (int, float)):
+    return float(value)
+  return None
 
 
 def plan_follow(
@@ -118,20 +226,19 @@ def plan_follow(
     return _plan_lost(scene, mem, cfg, heading_error_deg=heading_error_deg)
 
   mem.lost_ticks = 0
+  mem.wander_i = 0
   person_m = _finite_m(person.get("dist_m"))
   bearing = str(person.get("bearing") or "center").lower()
 
   if _blocked_ahead_of_person(
-    person_m=person_m, closest_m=closest_m, center_m=center_m, cfg=cfg
+    person_m=person_m,
+    closest_m=closest_m,
+    center_m=center_m,
+    cfg=cfg,
+    floor_ahead_pct=_floor_pct(scene),
   ):
-    turn = _freer_turn(sectors)
-    return DriveNudge(
-      turn,
-      speed=cfg.turn_speed,
-      dur_ms=cfg.turn_dur_ms,
-      reason="avoid",
-      person=person,
-    )
+    return _unstick(mem, cfg, sectors, person=person, turn_reason="avoid")
+  _clear_stuck(mem)
 
   if person_m is not None and person_m <= cfg.follow_stop_m:
     return DriveNudge("idle", reason="close", person=person)
@@ -140,7 +247,7 @@ def plan_follow(
     return DriveNudge(
       "turn_left",
       speed=cfg.turn_speed,
-      dur_ms=cfg.turn_dur_ms,
+      dur_ms=_dur(cfg, cfg.turn_dur_ms, mem),
       reason="turn_to_person",
       person=person,
     )
@@ -148,15 +255,25 @@ def plan_follow(
     return DriveNudge(
       "turn_right",
       speed=cfg.turn_speed,
-      dur_ms=cfg.turn_dur_ms,
+      dur_ms=_dur(cfg, cfg.turn_dur_ms, mem),
       reason="turn_to_person",
+      person=person,
+    )
+
+  if cfg.alive_jitter > 0 and _rng(mem).random() < min(0.2, cfg.alive_jitter * 0.55):
+    peek = _freer_turn(sectors, mem, jitter=cfg.alive_jitter)
+    return DriveNudge(
+      peek,
+      speed=cfg.turn_speed,
+      dur_ms=_dur(cfg, max(120, int(cfg.turn_dur_ms * 0.55)), mem),
+      reason="wiggle",
       person=person,
     )
 
   return DriveNudge(
     "forward",
     speed=cfg.forward_speed,
-    dur_ms=cfg.forward_dur_ms,
+    dur_ms=_dur(cfg, cfg.forward_dur_ms, mem),
     reason="approach",
     person=person,
   )
@@ -171,7 +288,42 @@ def _search_turn(mem: PlayMemory, cfg: PlayConfig, *, reason: str) -> DriveNudge
   return DriveNudge(
     mem.search_dir,
     speed=speed,
-    dur_ms=cfg.search_turn_dur_ms,
+    dur_ms=_dur(cfg, cfg.search_turn_dur_ms, mem),
+    reason=reason,
+  )
+
+
+def _ensure_seek_cycle(mem: PlayMemory, cfg: PlayConfig) -> tuple[int, int]:
+  if cfg.alive_jitter <= 0:
+    return max(1, cfg.search_turn_ticks), max(1, cfg.search_forward_ticks)
+  if mem.cycle_turn_n > 0 and mem.cycle_fwd_n > 0:
+    return mem.cycle_turn_n, mem.cycle_fwd_n
+  rng = _rng(mem)
+  turn_span = max(0, int(round(cfg.search_turn_ticks * cfg.alive_jitter)))
+  fwd_span = max(0, int(round(cfg.search_forward_ticks * cfg.alive_jitter)))
+  mem.cycle_turn_n = max(1, cfg.search_turn_ticks + (rng.randint(-turn_span, turn_span) if turn_span else 0))
+  mem.cycle_fwd_n = max(1, cfg.search_forward_ticks + (rng.randint(-fwd_span, fwd_span) if fwd_span else 0))
+  return mem.cycle_turn_n, mem.cycle_fwd_n
+
+
+def _wander_look_then_go(mem: PlayMemory, cfg: PlayConfig, *, reason: str) -> DriveNudge:
+  """Glance one way, roll, glance the other way. Used by follow-lost and seek."""
+  turn_n, fwd_n = _ensure_seek_cycle(mem, cfg)
+  cycle = turn_n + fwd_n
+  phase = mem.wander_i % cycle
+  mem.wander_i += 1
+  if phase == 0 and mem.wander_i > 1:
+    _flip_search_dir(mem)
+    if cfg.alive_jitter > 0:
+      mem.cycle_turn_n = 0
+      mem.cycle_fwd_n = 0
+      turn_n, fwd_n = _ensure_seek_cycle(mem, cfg)
+  if phase < turn_n:
+    return _search_turn(mem, cfg, reason=reason)
+  return DriveNudge(
+    "forward",
+    speed=cfg.forward_speed,
+    dur_ms=_dur(cfg, cfg.search_forward_dur_ms, mem),
     reason=reason,
   )
 
@@ -183,19 +335,27 @@ def _plan_lost(
   *,
   heading_error_deg: Optional[float],
 ) -> DriveNudge:
-  """No YOLO person: wait a tick or two for flicker, then sweep one way.
+  """No YOLO person: wait a tick or two for flicker, then glance and roll.
 
   Do not chase last-voice DoA — it freezes after speech and spins forever.
   """
-  del scene, heading_error_deg
+  del heading_error_deg
   mem.lost_ticks += 1
   if mem.lost_ticks <= max(0, cfg.lost_ticks_max):
     return DriveNudge("idle", reason="lost")
-  turn_n = max(1, cfg.search_turn_ticks)
-  scan_index = mem.lost_ticks - max(0, cfg.lost_ticks_max) - 1
-  if scan_index > 0 and scan_index % turn_n == 0:
-    _flip_search_dir(mem)
-  return _search_turn(mem, cfg, reason="scan")
+  sectors = scene.get("sectors") if isinstance(scene.get("sectors"), dict) else {}
+  closest_m = _finite_m(scene.get("closest_m"))
+  center_m = _finite_m(sectors.get("center"))
+  if _blocked_ahead_of_person(
+    person_m=None,
+    closest_m=closest_m,
+    center_m=center_m,
+    cfg=cfg,
+    floor_ahead_pct=_floor_pct(scene),
+  ):
+    return _unstick(mem, cfg, sectors, turn_reason="scan")
+  _clear_stuck(mem)
+  return _wander_look_then_go(mem, cfg, reason="scan")
 
 
 def plan_seek(
@@ -216,6 +376,7 @@ def plan_seek(
     person_m = _finite_m(person.get("dist_m"))
     if person_m is not None and person_m <= cfg.found_m:
       mem.lost_ticks = 0
+      mem.wander_i = 0
       return DriveNudge("idle", reason="found", person=person)
     return plan_follow(scene, mem, cfg, heading_error_deg=heading_error_deg)
   return _plan_seek_lost(scene, mem, cfg)
@@ -233,26 +394,18 @@ def _plan_seek_lost(
   closest_m = _finite_m(scene.get("closest_m"))
   center_m = _finite_m(sectors.get("center"))
   blocked = _blocked_ahead_of_person(
-    person_m=None, closest_m=closest_m, center_m=center_m, cfg=cfg
+    person_m=None,
+    closest_m=closest_m,
+    center_m=center_m,
+    cfg=cfg,
+    floor_ahead_pct=_floor_pct(scene),
   )
   if blocked:
-    mem.search_dir = _freer_turn(sectors)
-    return _search_turn(mem, cfg, reason="search")
-  # Sweep one heading, then roll several times into the room, then the other way.
-  turn_n = max(1, cfg.search_turn_ticks)
-  fwd_n = max(1, cfg.search_forward_ticks)
-  cycle = turn_n + fwd_n
-  phase = (mem.lost_ticks - 1) % cycle
-  if phase == 0 and mem.lost_ticks > 1:
-    _flip_search_dir(mem)
-  if phase < turn_n:
-    return _search_turn(mem, cfg, reason="search")
-  return DriveNudge(
-    "forward",
-    speed=cfg.forward_speed,
-    dur_ms=cfg.search_forward_dur_ms,
-    reason="search",
-  )
+    mem.cycle_turn_n = 0
+    mem.cycle_fwd_n = 0
+    return _unstick(mem, cfg, sectors, turn_reason="search")
+  _clear_stuck(mem)
+  return _wander_look_then_go(mem, cfg, reason="search")
 
 
 def plan(
