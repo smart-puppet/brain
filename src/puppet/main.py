@@ -44,8 +44,9 @@ def main(argv: list[str] | None = None) -> int:
   parser.add_argument(
     "--language",
     "-l",
-    choices=["en", "fr", "de"],
-    help="Language profile (overrides config/language.active)",
+    choices=None,
+    metavar="CODE",
+    help="Language profile (en_1, fr_1, de_1, de_2, …). Overrides config/language.active",
   )
   parser.add_argument(
     "--once",
@@ -59,6 +60,11 @@ def main(argv: list[str] | None = None) -> int:
     help="Log jaw servo timelines and moves (puppet.mouth logger)",
   )
   args = parser.parse_args(argv)
+  if args.language:
+    from puppet.core.config import parse_language_id
+
+    if not parse_language_id(args.language):
+      parser.error("language must look like en_1, fr_1, de_1, or de_2")
 
   config = load_config(args.config, language=args.language)
   if args.mouth_debug:

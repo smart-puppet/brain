@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,11 @@ _CONFIG_FILES = (
 )
 
 _KNOWN_PROFILES = ("respeaker", "regular-mic")
+LANGUAGE_CODES = ("en", "fr", "de")
+DEFAULT_LANGUAGE = "de_1"
+LANGUAGE_ACTIVE_FILE = "language.active"
+_LANG_ID_RE = re.compile(r"^(en|fr|de)(?:_([1-9]\d*))?$")
+_LOCALE_ORDER = {"en": 0, "fr": 1, "de": 2}
 
 
 def _load_yaml_file(path: Path) -> dict[str, Any]:
@@ -38,7 +44,10 @@ def _profile_from_file(path: Path) -> dict[str, Any] | None:
   else:
     code = path.stem.lower()
     wrapped = data.get(code)
-    if isinstance(wrapped, dict) and set(data.keys()) == {code}:
+    if not isinstance(wrapped, dict):
+      loc = language_locale(code)
+      wrapped = data.get(loc) if loc != code else None
+    if isinstance(wrapped, dict) and len(data) == 1:
       return wrapped
     return data
   if not isinstance(profiles, dict):
@@ -46,22 +55,13 @@ def _profile_from_file(path: Path) -> dict[str, Any] | None:
   code = path.stem.lower()
   if code in profiles and isinstance(profiles[code], dict):
     return profiles[code]
+  loc = language_locale(code)
+  if loc in profiles and isinstance(profiles[loc], dict):
+    return profiles[loc]
   if len(profiles) == 1:
     only = next(iter(profiles.values()))
     return only if isinstance(only, dict) else None
   return None
-
-
-def _profiles_from_dir(lang_dir: Path) -> dict[str, Any]:
-  """Load ``<code>.yaml`` files in a directory into a profiles map."""
-  if not lang_dir.is_dir():
-    return {}
-  profiles: dict[str, Any] = {}
-  for path in sorted(lang_dir.glob("*.yaml")):
-    profile = _profile_from_file(path)
-    if profile:
-      profiles[path.stem.lower()] = profile
-  return profiles
 
 
 def local_language_dir(config_path: Path) -> Path:
@@ -70,21 +70,94 @@ def local_language_dir(config_path: Path) -> Path:
 
 
 def local_german_overlay_path(config_path: Path) -> Path:
-  """Optional ``../brain/de.yaml``. Missing → stock German in config/language."""
+  """Deprecated path: unnumbered ``../brain/de.yaml`` (loaded as the next de_N)."""
   return local_language_dir(config_path) / "de.yaml"
 
 
+def _split_stem(stem: str) -> tuple[str, int | None] | None:
+  m = _LANG_ID_RE.match((stem or "").strip().lower())
+  if not m:
+    return None
+  num = int(m.group(2)) if m.group(2) else None
+  return m.group(1), num
+
+
+def _next_overlay_id(locale: str, used: set[str]) -> str:
+  n = 2
+  while f"{locale}_{n}" in used:
+    n += 1
+  return f"{locale}_{n}"
+
+
+def iter_language_profile_files(config_path: Path) -> list[tuple[str, Path, bool]]:
+  """Return (id, path, overlay) for stock ``language/`` then local ``../brain`` overlays."""
+  config_path = Path(config_path)
+  found: dict[str, tuple[Path, bool]] = {}
+
+  def _take(lang_dir: Path, overlay: bool) -> None:
+    if not lang_dir.is_dir():
+      return
+    numbered: list[tuple[str, Path]] = []
+    unnumbered: list[tuple[str, Path]] = []
+    for path in sorted(lang_dir.glob("*.yaml")):
+      parsed = _split_stem(path.stem)
+      if parsed is None:
+        continue
+      locale, num = parsed
+      if num is None:
+        unnumbered.append((locale, path))
+      else:
+        numbered.append((f"{locale}_{num}", path))
+    for pid, path in numbered:
+      found[pid] = (path, overlay)
+    for locale, path in unnumbered:
+      pid = _next_overlay_id(locale, set(found)) if overlay else f"{locale}_1"
+      if pid not in found:
+        found[pid] = (path, overlay)
+
+  _take(config_path / "language", overlay=False)
+  _take(local_language_dir(config_path), overlay=True)
+  items = [(pid, path, overlay) for pid, (path, overlay) in found.items()]
+  items.sort(
+    key=lambda item: (
+      _LOCALE_ORDER.get(language_locale(item[0]), 9),
+      split_language_id(item[0])[1],
+    )
+  )
+  return items
+
+
 def _load_language_dir(config_path: Path) -> dict[str, Any]:
-  """Stock ``config/language/``; German uses ``../brain/de.yaml`` only if that file exists."""
-  profiles = _profiles_from_dir(config_path / "language")
-  overlay = local_german_overlay_path(config_path)
-  if overlay.is_file():
-    local_de = _profile_from_file(overlay)
-    if local_de:
-      profiles["de"] = local_de
+  """Stock ``config/language/en_1.yaml`` plus local overlays such as ``../brain/de_2.yaml``."""
+  profiles: dict[str, Any] = {}
+  for pid, path, _overlay in iter_language_profile_files(config_path):
+    profile = _profile_from_file(path)
+    if profile:
+      profiles[pid] = profile
   if not profiles:
     return {}
   return {"language": {"profiles": profiles}}
+
+
+def list_language_profiles(config_dir: str | Path) -> list[dict[str, Any]]:
+  """Profiles Eye can show: stock *_1 plus any numbered overlays that exist."""
+  out: list[dict[str, Any]] = []
+  for pid, path, overlay in iter_language_profile_files(Path(config_dir)):
+    profile = _profile_from_file(path) or {}
+    loc, num = split_language_id(pid)
+    label = str(profile.get("label") or "").strip() or pid
+    out.append(
+      {
+        "id": pid,
+        "label": label,
+        "locale": loc,
+        "index": num,
+        "overlay": overlay,
+        "file": str(path),
+        "button": f"{loc.upper()} {num}",
+      }
+    )
+  return out
 
 
 def _load_profile(config_path: Path, profile: str) -> dict[str, Any]:
@@ -122,10 +195,6 @@ def _env_overrides(prefix: str = "PUPPET_") -> dict[str, Any]:
   return nested
 
 
-LANGUAGE_CODES = ("en", "fr", "de")
-DEFAULT_LANGUAGE = "de"
-LANGUAGE_ACTIVE_FILE = "language.active"
-
 _READY_LISTEN_PROMPTS: dict[str, str] = {
   "en": "Hello! I'm Kace, and I'm ready to listen!",
   "fr": "Coucou ! Je suis Kace, je suis prêt à t'écouter !",
@@ -133,20 +202,47 @@ _READY_LISTEN_PROMPTS: dict[str, str] = {
 }
 
 
+def language_locale(code: str) -> str:
+  """``de_2`` → ``de``. Unknown values keep the first two letters."""
+  raw = (code or "").strip().lower()
+  m = _LANG_ID_RE.match(raw)
+  if m:
+    return m.group(1)
+  return raw[:2] if raw else "en"
+
+
+def split_language_id(code: str) -> tuple[str, int]:
+  raw = (code or "").strip().lower()
+  m = _LANG_ID_RE.match(raw)
+  if not m:
+    return language_locale(raw), 1
+  return m.group(1), int(m.group(2) or 1)
+
+
+def parse_language_id(text: str) -> str | None:
+  """Canonical profile id: ``en_1``, ``de_2``. Bare ``en``/``fr``/``de`` means ``*_1``."""
+  raw = (text or "").strip().lower().strip("'\"")
+  m = _LANG_ID_RE.match(raw)
+  if not m:
+    return None
+  return f"{m.group(1)}_{m.group(2) or 1}"
+
+
 def parse_language_code(text: str) -> str | None:
-  """Return en|fr|de from a one-line file or tiny YAML blob."""
+  """Canonical id from a one-line file or tiny YAML blob."""
   raw = (text or "").strip()
   if not raw:
     return None
   first = raw.splitlines()[0].strip().lower().strip("'\"")
-  if first in LANGUAGE_CODES:
-    return first
+  parsed = parse_language_id(first)
+  if parsed:
+    return parsed
   try:
     data = yaml.safe_load(raw)
   except yaml.YAMLError:
     return None
-  if isinstance(data, str) and data.strip().lower() in LANGUAGE_CODES:
-    return data.strip().lower()
+  if isinstance(data, str):
+    return parse_language_id(data)
   if isinstance(data, dict):
     nested = data.get("language")
     active = None
@@ -154,9 +250,7 @@ def parse_language_code(text: str) -> str | None:
       active = nested.get("active")
     if active is None:
       active = data.get("active")
-    code = str(active or "").strip().lower()
-    if code in LANGUAGE_CODES:
-      return code
+    return parse_language_id(str(active or ""))
   return None
 
 
@@ -175,16 +269,40 @@ def read_language_active_file(config_dir: str | Path) -> str | None:
 
 
 def write_language_active_file(config_dir: str | Path, language: str) -> Path:
-  code = str(language or "").strip().lower()
-  if code not in LANGUAGE_CODES:
-    known = ", ".join(LANGUAGE_CODES)
-    raise ValueError(f"language must be one of: {known}")
+  code = parse_language_id(str(language or ""))
+  if not code:
+    raise ValueError("language must look like en_1, fr_1, de_1, or de_2")
   path = language_active_path(config_dir)
   path.parent.mkdir(parents=True, exist_ok=True)
   tmp = path.with_name(path.name + ".tmp")
   tmp.write_text(code + "\n", encoding="utf-8")
   tmp.replace(path)
   return path
+
+
+def _canonicalize_profiles(profiles: dict[str, Any] | None) -> dict[str, Any]:
+  out: dict[str, Any] = {}
+  for key, value in (profiles or {}).items():
+    if not isinstance(value, dict):
+      continue
+    pid = parse_language_id(str(key))
+    if pid:
+      out[pid] = value
+  return out
+
+
+def resolve_active_language(active: str | None, profiles: dict[str, Any]) -> str:
+  pid = parse_language_id(str(active or "")) or str(active or "").strip().lower()
+  if pid in profiles:
+    return pid
+  loc = language_locale(pid)
+  fallback = f"{loc}_1"
+  if fallback in profiles:
+    return fallback
+  if DEFAULT_LANGUAGE in profiles:
+    return DEFAULT_LANGUAGE
+  known = ", ".join(sorted(profiles)) or "(none)"
+  raise ValueError(f"Unknown language profile '{active}'. Known profiles: {known}")
 
 
 def get_ready_listen_prompt(config: dict[str, Any]) -> str:
@@ -198,18 +316,15 @@ def get_ready_listen_prompt(config: dict[str, Any]) -> str:
   prompt = profile.get("ready_listen_prompt")
   if isinstance(prompt, str) and prompt.strip():
     return prompt.strip()
-  return _READY_LISTEN_PROMPTS.get(active, _READY_LISTEN_PROMPTS["en"])
+  return _READY_LISTEN_PROMPTS.get(language_locale(active), _READY_LISTEN_PROMPTS["en"])
 
 
 def apply_language_profile(config: dict[str, Any]) -> dict[str, Any]:
   """Apply the active language profile to stt, tts, and llm sections."""
-  lang_cfg = config.get("language", {})
-  active = lang_cfg.get("active", "en")
-  profiles = lang_cfg.get("profiles", {})
-  if active not in profiles:
-    known = ", ".join(sorted(profiles)) or "(none)"
-    raise ValueError(f"Unknown language profile '{active}'. Known profiles: {known}")
-
+  lang_cfg = config.setdefault("language", {})
+  profiles = _canonicalize_profiles(lang_cfg.get("profiles"))
+  lang_cfg["profiles"] = profiles
+  active = resolve_active_language(lang_cfg.get("active"), profiles)
   profile = profiles[active]
   config.setdefault("stt", {})
   config.setdefault("tts", {})
@@ -247,13 +362,14 @@ def load_config(config_dir: str | Path, *, language: str | None = None) -> dict[
   if profile is not None:
     merged = _deep_merge(merged, _load_profile(config_path, str(profile)))
 
-  # language.active (Eye) wins over language.yaml; missing file → German.
+  lang_cfg = merged.setdefault("language", {})
+  lang_cfg["profiles"] = _canonicalize_profiles(lang_cfg.get("profiles"))
+  # language.active (Eye) wins over language.yaml; missing file → German stock.
   file_lang = read_language_active_file(config_path)
-  profiles = (merged.get("language") or {}).get("profiles") or {}
   if file_lang:
-    merged.setdefault("language", {})["active"] = file_lang
-  elif DEFAULT_LANGUAGE in profiles:
-    merged.setdefault("language", {})["active"] = DEFAULT_LANGUAGE
+    lang_cfg["active"] = file_lang
+  elif DEFAULT_LANGUAGE in lang_cfg["profiles"]:
+    lang_cfg["active"] = DEFAULT_LANGUAGE
 
   merged = _deep_merge(merged, _env_overrides())
   if language:

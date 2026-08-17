@@ -29,13 +29,13 @@ pip install -e ".[dev]"
 
 # Run
 puppet --config config/
-# or: ./scripts/run_puppet.sh --language fr
+# or: ./scripts/run_puppet.sh --language fr_1
 # French or German:
-puppet --language fr
-puppet --language de
+puppet --language fr_1
+puppet --language de_1
 ```
 
-Configuration: see **[config/README.md](config/README.md)**. Pick mic profile in `config/default.yaml` (`profile: respeaker`), language in Eye or `puppet --language fr`. Edit prompts in `config/language/`.
+Configuration: see **[config/README.md](config/README.md)**. Pick mic profile in `config/default.yaml` (`profile: respeaker`), language in Eye or `puppet --language fr_1`. Edit prompts in `config/language/`.
 
 ## Layout
 

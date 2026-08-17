@@ -214,18 +214,18 @@ Default targets:
 
 ### Language
 
-Brain reads `config/language.active` at **startup only** (`en`, `fr`, or `de`). Eye writes that file. If it is missing, the robot starts in **German**. `puppet --language fr` still overrides for that process.
+Brain reads `config/language.active` at **startup only** (`en_1`, `fr_1`, `de_1`, `de_2`, …). Eye writes that file. Bare `en`/`fr`/`de` still means `*_1`. If the file is missing, the robot starts in **German** (`de_1`). `puppet --language fr_1` still overrides for that process.
 
-Each profile in `config/language/` (`en.yaml`, `fr.yaml`, `de.yaml`) configures:
+Each profile in `config/language/` (`en_1.yaml`, `fr_1.yaml`, `de_1.yaml`) plus local overlays in `../brain/` (`de_2.yaml`, …) configures:
 
 - STT locale (`stt_language` → parakeet `stream_begin_lang`)
 - Piper TTS model paths
 - LLM system prompt (reply language)
 
 ```bash
-puppet --language fr
+puppet --language fr_1
 # or
-PUPPET_LANGUAGE__ACTIVE=de puppet
+PUPPET_LANGUAGE__ACTIVE=de_1 puppet
 ```
 
 You can override any source/path with environment variables, for example:

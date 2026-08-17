@@ -9,13 +9,13 @@ Puppet loads YAML from this directory and deep-merges it at startup.
    profile: respeaker   # ReSpeaker XVF3800 (default)
    # profile: regular-mic
    ```
-2. Pick a **language** in Eye (writes `config/language.active`) or run `puppet --language fr`. Missing file → German at brain start. Edit prompts in `config/language/en.yaml`, `fr.yaml`, `de.yaml`. If `../brain/de.yaml` exists, German uses that file; otherwise `language/de.yaml`.
+2. Pick a **language** in Eye (writes `config/language.active`) or run `puppet --language fr_1`. Missing file → German (`de_1`) at brain start. Edit prompts in `config/language/en_1.yaml`, `fr_1.yaml`, `de_1.yaml`. Local overlays live in `../brain/` as `de_2.yaml`, `fr_2.yaml`, … and show up on Eye.
 3. Tune hardware in `puppet.yaml` → `mouth` (servo bus, angles, sync).
 4. Everything else: only change when you know you need to (see tables below).
 
 Merge order (later wins):
 
-`default.yaml` → `profiles/<profile>.yaml` → `language/*.yaml` → `../brain/de.yaml` (if present) → `language.active` (or German) → `stt.yaml` → `llm.yaml` → `tts.yaml` → `vad.yaml` → `puppet.yaml` → env (`PUPPET_*`) → `--language`
+`default.yaml` → `profiles/<profile>.yaml` → `language/*.yaml` → `../brain/de_2.yaml` (and other numbered overlays, if present) → `language.active` (or German `de_1`) → `stt.yaml` → `llm.yaml` → `tts.yaml` → `vad.yaml` → `puppet.yaml` → env (`PUPPET_*`) → `--language`
 
 ## Mic profiles
 
@@ -35,9 +35,9 @@ Profile files: `config/profiles/respeaker.yaml`, `config/profiles/regular-mic.ya
 |------|------------------|-------------|
 | `default.yaml` | Profile name, core audio I/O, logging, MQTT vision/capture | Changing mic type, log level, ALSA devices, vision capture |
 | `profiles/*.yaml` | Mic-specific VAD / barge-in / ReSpeaker USB | Switching between ReSpeaker and regular mic |
-| `language/en.yaml` `fr.yaml` `de.yaml` | Persona prompts per locale | Editing Kace's voice / tags in that language |
-| `../brain/de.yaml` | Optional local German overlay (gitignored) | Local German prompt; if missing, `language/de.yaml` |
-| `language.active` | One-line `en`/`fr`/`de` (gitignored) | Eye language picker; missing → German |
+| `language/en_1.yaml` `fr_1.yaml` `de_1.yaml` | Persona prompts per locale | Editing Kace's voice / tags in that language |
+| `../brain/de_2.yaml` | Optional local overlay (gitignored) | Extra persona; Eye shows **DE 2** |
+| `language.active` | One-line `en_1`/`fr_1`/`de_1`/`de_2` (gitignored) | Eye language picker; missing → German `de_1` |
 | `play.speeds` | JSON follow/seek/forward (gitignored) | Eye speed sliders; live via `robot/play/speeds` |
 | `stt.yaml` | Nemotron model path, streaming chunk size, GPU suspend | STT latency, model swap |
 | `llm.yaml` | Model, context, temperature, `binding` (upstream/prism) | Reply style / model swap / LLM build |

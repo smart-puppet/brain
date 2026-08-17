@@ -1,12 +1,14 @@
-# Language profiles (one file each):
-#   language/en.yaml
-#   language/fr.yaml
-#   language/de.yaml
+# Language profiles (one numbered file each):
+#   language/en_1.yaml
+#   language/fr_1.yaml
+#   language/de_1.yaml
 #
-# Optional local German overlay. Used only if the file exists:
-#   ../brain/de.yaml   (next to this config folder)
-# If it is missing, German falls back to language/de.yaml.
+# Local overlays live next to this config folder and are not committed:
+#   ../brain/de_2.yaml   (example: another German persona)
+#   ../brain/fr_2.yaml
+# Unnumbered ../brain/de.yaml is still loaded as the next free de_N if no de_1.yaml overlay exists.
 #
-# Active locale is NOT set here. Eye writes language.active
-# (one line: en | fr | de). If that file is missing, brain starts in German.
-# Override for one run: puppet --language fr
+# Active profile is NOT set here. Eye writes language.active
+# (one line: en_1 | fr_1 | de_1 | de_2 | …). Bare en/fr/de means *_1.
+# If that file is missing, brain starts in German (de_1).
+# Override for one run: puppet --language fr_1

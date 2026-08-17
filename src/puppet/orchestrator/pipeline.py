@@ -15,7 +15,7 @@ from puppet.core.audio.capture import (
 from puppet.core.audio.pcm import prepend_lead_in_silence, rms_energy
 from puppet.core.audio.vad import VoiceActivityDetector, create_vad
 from puppet.core.audio.respeaker import RespeakerDoaMonitor, maybe_reset_respeaker_on_start
-from puppet.core.config import get_ready_listen_prompt
+from puppet.core.config import get_ready_listen_prompt, language_locale
 from puppet.core.events import EventBus
 from puppet.core.types import Conversation, PipelineState, TranscriptSegment
 from puppet.llm.base import LlmBackend
@@ -357,7 +357,9 @@ class Orchestrator:
       on_phrase_begin=self._on_tts_phrase_begin,
       on_phrase_end=self._on_tts_phrase_end,
     )
-    self._vision_lang = str((config.get("language") or {}).get("active") or "en")
+    self._vision_lang = language_locale(
+      str((config.get("language") or {}).get("active") or "en")
+    )
     self._block_vision_tts = False
     self._defer_vision_tts = False
     self._vision_fresh_this_turn = False

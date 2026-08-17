@@ -32,7 +32,7 @@ def test_env_override(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   assert cfg["stt"]["model_path"] == "b.gguf"
 
 
-def test_local_brain_overlay_replaces_locale(tmp_path: Path) -> None:
+def test_local_brain_overlay_is_extra_profile(tmp_path: Path) -> None:
   config_dir = tmp_path / "config"
   lang_dir = config_dir / "language"
   overlay = tmp_path / "brain"
@@ -48,9 +48,35 @@ def test_local_brain_overlay_replaces_locale(tmp_path: Path) -> None:
     "de:\n  label: Deutsch\n  stt_language: de-DE\n  system_prompt: Overlay\n"
   )
   cfg = load_config(config_dir)
-  assert cfg["language"]["active"] == "de"
-  assert cfg["llm"]["system_prompt"] == "Overlay"
-  assert cfg["language"]["profiles"]["en"]["system_prompt"] == "Hello"
+  assert cfg["language"]["active"] == "de_1"
+  assert cfg["llm"]["system_prompt"] == "Kace"
+  assert cfg["language"]["profiles"]["de_1"]["system_prompt"] == "Kace"
+  assert cfg["language"]["profiles"]["de_2"]["system_prompt"] == "Overlay"
+  assert cfg["language"]["profiles"]["en_1"]["system_prompt"] == "Hello"
+
+
+def test_numbered_overlay_de_2_is_selectable(tmp_path: Path) -> None:
+  from puppet.core.config import list_language_profiles
+
+  config_dir = tmp_path / "config"
+  lang_dir = config_dir / "language"
+  overlay = tmp_path / "brain"
+  lang_dir.mkdir(parents=True)
+  overlay.mkdir()
+  (lang_dir / "de_1.yaml").write_text(
+    "label: Deutsch\nstt_language: de-DE\nsystem_prompt: Kace\n"
+  )
+  (overlay / "de_2.yaml").write_text(
+    "label: Deutsch Maelie\nstt_language: de-DE\nsystem_prompt: Maelie\n"
+  )
+  (config_dir / "language.active").write_text("de_2\n")
+  cfg = load_config(config_dir)
+  assert cfg["language"]["active"] == "de_2"
+  assert cfg["llm"]["system_prompt"] == "Maelie"
+  ids = [p["id"] for p in list_language_profiles(config_dir)]
+  assert ids == ["de_1", "de_2"]
+  assert list_language_profiles(config_dir)[1]["overlay"] is True
+  assert list_language_profiles(config_dir)[1]["button"] == "DE 2"
 
 
 def test_missing_local_brain_de_falls_back_to_config(tmp_path: Path) -> None:
@@ -74,7 +100,7 @@ def test_language_dir_profiles_load(tmp_path: Path) -> None:
     "label: Deutsch\nstt_language: de\nsystem_prompt: Hallo\n"
   )
   cfg = load_config(tmp_path)
-  assert cfg["language"]["active"] == "de"
+  assert cfg["language"]["active"] == "de_1"
   assert cfg["stt"]["language"] == "de"
   assert cfg["llm"]["system_prompt"] == "Hallo"
 
@@ -88,7 +114,7 @@ def test_language_active_file_overrides_yaml(tmp_path: Path) -> None:
   )
   (tmp_path / "language.active").write_text("fr\n")
   cfg = load_config(tmp_path)
-  assert cfg["language"]["active"] == "fr"
+  assert cfg["language"]["active"] == "fr_1"
   assert cfg["stt"]["language"] == "fr"
 
 
@@ -99,7 +125,7 @@ def test_missing_language_active_defaults_to_german(tmp_path: Path) -> None:
     "    de:\n      stt_language: de\n"
   )
   cfg = load_config(tmp_path)
-  assert cfg["language"]["active"] == "de"
+  assert cfg["language"]["active"] == "de_1"
   assert cfg["stt"]["language"] == "de"
 
 
@@ -112,7 +138,7 @@ def test_cli_language_beats_active_file(tmp_path: Path) -> None:
   )
   (tmp_path / "language.active").write_text("de\n")
   cfg = load_config(tmp_path, language="fr")
-  assert cfg["language"]["active"] == "fr"
+  assert cfg["language"]["active"] == "fr_1"
   assert cfg["stt"]["language"] == "fr"
 
 
@@ -123,7 +149,7 @@ def test_language_profile_cli_override(tmp_path: Path) -> None:
     "    fr:\n      stt_language: fr\n      system_prompt: Français\n"
   )
   cfg = load_config(tmp_path, language="fr")
-  assert cfg["language"]["active"] == "fr"
+  assert cfg["language"]["active"] == "fr_1"
   assert cfg["stt"]["language"] == "fr"
   assert cfg["llm"]["system_prompt"] == "Français"
 
@@ -187,6 +213,7 @@ def test_apply_language_profile_direct() -> None:
   apply_language_profile(cfg)
   assert cfg["stt"]["language"] == "de"
   assert cfg["llm"]["system_prompt"] == "Deutsch"
+  assert cfg["language"]["active"] == "de_1"
 
 
 def test_ready_listen_prompt_from_profile() -> None:
