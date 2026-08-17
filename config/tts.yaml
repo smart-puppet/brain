@@ -3,9 +3,9 @@
 tts:
   backend: piper
   device: cpu
-  n_threads: 4
+  n_threads: 3
   # Speech rate: 1.0 = normal, >1 faster, <1 slower (maps to Piper length_scale).
-  speed: 1.0
+  speed: 0.9
   speaker_id: null
   warmup: true
   warmup_text: "."
