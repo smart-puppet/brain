@@ -5,12 +5,16 @@ from __future__ import annotations
 import re
 
 _TAG_RE = re.compile(
-  r"<<\s*(follow|seek|stop|idle|look|see|capture|back|reverse|backward|recule)\s*>>",
+  r"<<\s*(follow|seek|stop|idle|look|see|capture|"
+  r"back|reverse|backward|recule|"
+  r"forward|avance|vorwaerts)\s*>>",
   re.IGNORECASE,
 )
 _LINE_RE = re.compile(
   r"(?im)^\s*(?:ACTION|ACT)\s*:\s*"
-  r"(follow|seek|stop|idle|look|see|capture|back|reverse|backward|recule)\s*$"
+  r"(follow|seek|stop|idle|look|see|capture|"
+  r"back|reverse|backward|recule|"
+  r"forward|avance|vorwaerts)\s*$"
 )
 
 _NORM = {
@@ -25,6 +29,9 @@ _NORM = {
   "reverse": "back",
   "backward": "back",
   "recule": "back",
+  "forward": "forward",
+  "avance": "forward",
+  "vorwaerts": "forward",
 }
 
 # Private robot state is appended to the user turn. q8 KV cache copies it
@@ -34,7 +41,13 @@ _PRIVATE_SUFFIX_RE = re.compile(
 )
 _PRIVATE_MOTION_LINE_RE = re.compile(r"(?im)^\s*Motion\s*=\s*(?:on|off)\.?\s*$")
 _PRIVATE_PHRASE_RE = re.compile(
-  r"(?i)(?:\bBodyStatus\b|\bCameraJSON\b|\bPrivate:\s*|\bMotion\s*=\s*(?:on|off))"
+  r"(?i)(?:\bBodyStatus\b|\bCameraJSON\b|\bPrivate:\s*|\bMotion\s*=\s*(?:on|off)|"
+  r"(?:i(?:'m|\s+am)|you(?:'re|\s+are))\s+(?:already\s+)?standing still|"
+  r"^standing still\b)"
+)
+_STANDING_STILL_SENTENCE_RE = re.compile(
+  r"(?is)(?:^|[.!?]\s+)*(?:i(?:'m|\s+am)|you(?:'re|\s+are))\s+"
+  r"(?:already\s+)?standing still\b[^.!?]*[.!?]*"
 )
 
 
@@ -49,6 +62,7 @@ def strip_private_robot_state(text: str) -> str:
     return ""
   spoken = _PRIVATE_SUFFIX_RE.sub("", text)
   spoken = _PRIVATE_MOTION_LINE_RE.sub("", spoken)
+  spoken = _STANDING_STILL_SENTENCE_RE.sub("", spoken)
   spoken = re.sub(r"\n{3,}", "\n\n", spoken)
   return spoken.strip()
 
@@ -58,7 +72,7 @@ def _norm(raw: str) -> str:
 
 
 def parse_robot_actions(text: str) -> tuple[str, list[str]]:
-  """Return (spoken_text, actions) where actions are follow|seek|idle|look|back."""
+  """Return (spoken_text, actions) where actions are follow|seek|idle|look|back|forward."""
   if not text:
     return "", []
   actions: list[str] = []

@@ -162,6 +162,18 @@ class PlaySupervisor:
       )
     )
 
+  def forward_once(self) -> None:
+    """Stop follow/seek, then one timed forward nudge."""
+    self.set_mode("idle", announce=False)
+    self._apply(
+      DriveNudge(
+        "forward",
+        speed=self.cfg.forward_speed,
+        dur_ms=self.cfg.forward_dur_ms,
+        reason="voice_forward",
+      )
+    )
+
   def _start_cmd_listener(self) -> None:
     try:
       import paho.mqtt.client as mqtt
@@ -188,9 +200,11 @@ class PlaySupervisor:
         self.apply_speeds(payload)
         return
       mode = str(payload.get("mode") or payload.get("cmd") or "").lower()
-      if mode in ("stop", "idle", "follow", "seek", "back"):
+      if mode in ("stop", "idle", "follow", "seek", "back", "forward"):
         if mode == "back":
           self.backup_once()
+        elif mode == "forward":
+          self.forward_once()
         else:
           self.set_mode("idle" if mode == "stop" else mode)
 

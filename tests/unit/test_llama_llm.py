@@ -81,6 +81,26 @@ def test_vision_instructions_stay_in_one_language() -> None:
   assert vision_instructions("fr-FR").startswith("L'état")
 
 
+def test_vision_instructions_include_command_examples() -> None:
+  from puppet.llm.llama import vision_instructions
+
+  en = vision_instructions("en")
+  assert "Child: Can you follow me?" in en
+  assert "Child: Can you move forward?" in en
+  assert "Child: Can you move a bit more backward?" in en
+  assert "little. <<forward>>" in en
+  assert "little. <<backward>>" in en
+  for tag in ("<<follow>>", "<<forward>>", "<<backward>>", "<<seek>>", "<<stop>>", "<<look>>"):
+    assert tag in en
+  fr = vision_instructions("fr")
+  assert "Enfant : Tu peux avancer ?" in fr
+  assert "<<forward>>" in fr
+  assert "<<recule>>" in fr
+  de = vision_instructions("de")
+  assert "Kind: Kannst du vorwärts fahren?" in de
+  assert "<<backward>>" in de
+
+
 def test_frozen_system_uses_active_language() -> None:
   from puppet.llm.llama import LlamaLlm, vision_instructions
 

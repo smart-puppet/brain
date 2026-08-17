@@ -34,9 +34,14 @@ _PHRASES: dict[str, dict[str, str]] = {
     "de": "Okay, ich bleibe hier.",
   },
   "back": {
-    "en": "Okay, I will reverse a little.",
+    "en": "Okay, I will roll backward a little.",
     "fr": "D'accord, je recule un peu.",
     "de": "Okay, ich fahre ein Stueck zurueck.",
+  },
+  "forward": {
+    "en": "Okay, I will roll forward a little.",
+    "fr": "D'accord, j'avance un peu.",
+    "de": "Okay, ich fahre ein Stueck vor.",
   },
   "ack": {
     "en": "Okay!",

@@ -952,14 +952,13 @@ class Orchestrator:
     self.bus.emit("generation_started", draft=self.conversation.draft_user, epoch=epoch)
 
   def _body_status_line(self) -> str:
+    # Idle "standing still" is English Gemma copies as the whole reply. Only inject
+    # while rolling so it knows not to add <<follow>> / <<seek>> again.
     mode = self._play.mode if self._play is not None else "idle"
-    labels = {
-      "follow": "following the child (wheels may roll). If they ask to stop, you MUST add <<stop>>",
-      "seek": "playing hide-and-seek (searching). If they ask to stop, you MUST add <<stop>>",
-      "idle": "standing still",
-    }
-    motion = "on" if (self._play is not None and self._play.allow_motion) else "off"
-    return f"BodyStatus: {labels.get(mode, 'standing still')}. Motion={motion}."
+    if mode not in ("follow", "seek"):
+      return ""
+    motion = "on" if self._play.allow_motion else "off"
+    return f"BodyStatus: {mode}. Motion={motion}."
 
   def _user_asked_to_see(self, text: str) -> bool:
     """True when the child asked what is in front of the camera."""
@@ -973,7 +972,7 @@ class Orchestrator:
 
   def _llm_body_context(self) -> str:
     """Mutable robot state for the current user turn (not the frozen system prompt)."""
-    parts = [self._body_status_line()]
+    parts = [line for line in (self._body_status_line(),) if line]
     for ingest in (self._scene_ingest, self._play_scene):
       if ingest is None or not ingest.inject_context:
         continue
@@ -1070,7 +1069,7 @@ class Orchestrator:
     # with the same phrase makes Piper count twice.
     if motion == "seek":
       return spoken
-    if motion in ("follow", "back", "idle"):
+    if motion in ("follow", "back", "idle", "forward"):
       kind = motion
     elif looked:
       return spoken
@@ -1092,21 +1091,37 @@ class Orchestrator:
 
   def _apply_llm_backup(self) -> None:
     """One-shot reverse after the child asked to back up."""
+    self._apply_llm_nudge("backward")
+
+  def _apply_llm_forward(self) -> None:
+    """One-shot forward roll after the child asked to move forward."""
+    self._apply_llm_nudge("forward")
+
+  def _apply_llm_nudge(self, direction: str) -> None:
+    if direction not in ("forward", "backward"):
+      return
     if self._play is not None:
-      self._play.backup_once()
+      if direction == "backward":
+        self._play.backup_once()
+      else:
+        self._play.forward_once()
       return
     if self._drive is None:
-      logger.warning("LLM <<back>> but no drive client")
+      logger.warning("LLM %s but no drive client", direction)
       return
     play_cfg = self.config.get("play", {}) or {}
     follow = play_cfg.get("follow", {}) or {}
-    speed = int(follow.get("backward_speed", follow.get("forward_speed", 105)))
-    dur_ms = int(follow.get("backward_dur_ms", follow.get("forward_dur_ms", 500)))
-    result = self._drive.nudge("backward", dur_ms=dur_ms, speed=speed)
-    if result.get("ok"):
-      logger.info("Drive backward speed=%s dur=%sms reason=voice_back", speed, dur_ms)
+    if direction == "backward":
+      speed = int(follow.get("backward_speed", follow.get("forward_speed", 105)))
+      dur_ms = int(follow.get("backward_dur_ms", follow.get("forward_dur_ms", 500)))
     else:
-      logger.warning("Drive backward failed: %s", result.get("error"))
+      speed = int(follow.get("forward_speed", 105))
+      dur_ms = int(follow.get("forward_dur_ms", 700))
+    result = self._drive.nudge(direction, dur_ms=dur_ms, speed=speed)
+    if result.get("ok"):
+      logger.info("Drive %s speed=%s dur=%sms reason=voice_%s", direction, speed, dur_ms, direction)
+    else:
+      logger.warning("Drive %s failed: %s", direction, result.get("error"))
 
   def _look_capture_after_reply(self) -> bool:
     """Fresh eyes capture after <<look>>. True if a scene landed."""
@@ -1269,10 +1284,17 @@ class Orchestrator:
     """Drop robot tags and leaked BodyStatus without counting as a vision dump."""
     from puppet.play.actions import looks_like_private_state, strip_robot_actions
 
-    if self._block_private_tts or looks_like_private_state(text):
+    if self._block_private_tts:
+      return ""
+    cleaned = strip_robot_actions(text)
+    if looks_like_private_state(cleaned):
       self._block_private_tts = True
       return ""
-    return strip_robot_actions(text)
+    if not cleaned and looks_like_private_state(text):
+      # BodyStatus / Motion= often arrive as later phrases in the same turn.
+      if re.search(r"(?i)\b(?:BodyStatus|CameraJSON|Motion\s*=)", text):
+        self._block_private_tts = True
+    return cleaned
 
   def _allow_tts_phrase(self, text: str) -> bool:
     """Block camera-note dumps from being spoken by Piper."""
@@ -1282,7 +1304,7 @@ class Orchestrator:
       self._block_vision_tts = True
       return False
     lowered = text.lower()
-    if any(tok in lowered for tok in ("<<follow", "<<seek", "<<stop", "<<look", "<<idle", "<<back", "<<reverse")):
+    if any(tok in lowered for tok in ("<<follow", "<<seek", "<<stop", "<<look", "<<idle", "<<back", "<<reverse", "<<backward", "<<forward", "<<recule")):
       return False
     if any(tok in lowered for tok in ("| path", "| ranges", "camerajson", "~1.", "~2.")):
       self._block_vision_tts = True
@@ -1303,20 +1325,22 @@ class Orchestrator:
     if actions:
       logger.info("LLM robot actions=%s", actions)
     motion = next(
-      (a for a in reversed(actions) if a in ("follow", "seek", "idle", "back")),
+      (a for a in reversed(actions) if a in ("follow", "seek", "idle", "back", "forward")),
       None,
     )
+    user_prompt = self.conversation.draft_user.strip()
     rolling = self._play is not None and self._play.mode in ("follow", "seek")
     if motion == "idle" and not rolling:
       logger.info("Ignoring <<idle>> (not following/seeking)")
       motion = None
     if motion == "back":
       self._apply_llm_backup()
+    elif motion == "forward":
+      self._apply_llm_forward()
     elif motion is not None:
       self._apply_llm_play_mode(motion)
     looked = False
     ingest = self._scene_ingest or self._play_scene
-    user_prompt = self.conversation.draft_user.strip()
     asked_see = self._user_asked_to_see(user_prompt)
     looking_bridge = self._looks_like_looking_bridge(spoken)
     want_look = "look" in actions or looking_bridge or asked_see
@@ -1350,7 +1374,7 @@ class Orchestrator:
         ),
         suppressed_phrases=self._worker.suppressed_phrases > 0,
         vision_question=asked_see or looked or "look" in actions,
-        motion=motion in ("follow", "seek", "idle", "back"),
+        motion=motion in ("follow", "seek", "idle", "back", "forward"),
       )
       if need_glimpse and ingest.has_objects() and not mentions_objects:
         logger.warning("LLM ignored detected objects; forcing glimpse")

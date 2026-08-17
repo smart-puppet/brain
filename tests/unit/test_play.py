@@ -26,7 +26,10 @@ def test_strips_leaked_body_status() -> None:
   )
   assert looks_like_private_state("BodyStatus:")
   assert looks_like_private_state("Motion=on.")
-  assert not looks_like_private_state("I am standing still.")
+  assert looks_like_private_state("I am already standing still.")
+  assert not looks_like_private_state("I will follow you.")
+  assert strip_private_robot_state("I am already standing still.") == ""
+  assert parse_robot_actions("I am already standing still.") == ("", [])
 
 
 def test_llm_follow_tag() -> None:
@@ -37,9 +40,18 @@ def test_llm_follow_tag() -> None:
 
 
 def test_llm_back_tag() -> None:
+  spoken, actions = parse_robot_actions("Okay, I will roll backward a little.\n<<backward>>")
+  assert actions == ["back"]
+  assert "backward" in spoken.lower()
+  assert "<<" not in spoken
   spoken, actions = parse_robot_actions("Okay, I will reverse a little.\n<<back>>")
   assert actions == ["back"]
-  assert "reverse" in spoken.lower()
+
+
+def test_llm_forward_tag() -> None:
+  spoken, actions = parse_robot_actions("Okay, I will roll forward a little. <<forward>>")
+  assert actions == ["forward"]
+  assert "forward" in spoken.lower()
   assert "<<" not in spoken
 
 
@@ -256,7 +268,7 @@ def test_play_found_and_giveup_phrases() -> None:
   assert "dix" in play_phrase("seek", "fr").lower()
   assert "zehn" in play_phrase("seek", "de").lower()
   assert "stay" in play_phrase("idle", "en").lower()
-  assert "reverse" in play_phrase("back", "en").lower()
+  assert "backward" in play_phrase("back", "en").lower()
   assert play_phrase("ack", "en")
   assert "accord" in play_phrase("ack", "fr").lower()
 
