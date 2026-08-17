@@ -85,6 +85,7 @@ def test_vision_instructions_include_command_examples() -> None:
   from puppet.llm.llama import vision_instructions
 
   en = vision_instructions("en")
+  assert "Child: Hello, how are you?" in en
   assert "Child: Can you follow me?" in en
   assert "Child: Can you move forward?" in en
   assert "Child: Can you move a bit more backward?" in en
@@ -93,6 +94,7 @@ def test_vision_instructions_include_command_examples() -> None:
   for tag in ("<<follow>>", "<<forward>>", "<<backward>>", "<<seek>>", "<<stop>>", "<<look>>"):
     assert tag in en
   fr = vision_instructions("fr")
+  assert "Enfant : Bonjour, ça va ?" in fr
   assert "Enfant : Tu peux avancer ?" in fr
   assert "<<forward>>" in fr
   assert "<<recule>>" in fr
