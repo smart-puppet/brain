@@ -19,7 +19,16 @@ llm:
   type_k: q4_0
   type_v: q4_0
   flash_attn: true
-  temperature: 1.0
+  # Sampling: 1.0 + no penalties made Gemma re-say "I am standing still" / gloomy
+  # catchphrases. Repeat penalty hits the last ~64 tokens (previous reply).
+  # Presence/frequency also count the system prompt, so keep them light or "Marvin"
+  # and "follow" get punished too.
+  temperature: 0.8
+  top_p: 0.9
+  top_k: 40
+  repeat_penalty: 1.15
+  presence_penalty: 0.25
+  frequency_penalty: 0.2
   max_tokens: 200
   warmup: true
   warmup_stream: true

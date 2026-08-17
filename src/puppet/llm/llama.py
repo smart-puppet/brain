@@ -169,6 +169,8 @@ class LlamaLlm(LlmBackend):
     top_p: float = 0.95,
     top_k: int = 40,
     presence_penalty: float = 0.0,
+    frequency_penalty: float = 0.0,
+    repeat_penalty: float = 1.0,
     max_tokens: int = 512,
     system_prompt: str = "",
     language: str = "en",
@@ -185,6 +187,8 @@ class LlamaLlm(LlmBackend):
     self._top_p = float(top_p)
     self._top_k = int(top_k)
     self._presence_penalty = float(presence_penalty)
+    self._frequency_penalty = float(frequency_penalty)
+    self._repeat_penalty = float(repeat_penalty)
     self._system_prompt = system_prompt.strip()
     self._vision_instructions = vision_instructions(language)
     self._n_ctx = n_ctx
@@ -319,6 +323,8 @@ class LlamaLlm(LlmBackend):
         top_p=self._top_p,
         top_k=self._top_k,
         presence_penalty=self._presence_penalty,
+        frequency_penalty=self._frequency_penalty,
+        repeat_penalty=self._repeat_penalty,
         max_tokens=self._max_tokens,
       )
       for chunk in stream:
@@ -367,6 +373,8 @@ def create_llm(config: dict[str, Any]) -> LlmBackend:
     top_p=float(llm_cfg.get("top_p", 0.95)),
     top_k=int(llm_cfg.get("top_k", 40)),
     presence_penalty=float(llm_cfg.get("presence_penalty", 0.0)),
+    frequency_penalty=float(llm_cfg.get("frequency_penalty", 0.0)),
+    repeat_penalty=float(llm_cfg.get("repeat_penalty", 1.0)),
     max_tokens=llm_cfg.get("max_tokens", 512),
     system_prompt=llm_cfg.get("system_prompt", ""),
     language=lang,

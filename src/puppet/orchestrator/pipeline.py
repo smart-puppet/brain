@@ -109,10 +109,12 @@ class Orchestrator:
         logger.warning("Vision MQTT ingest disabled: %s", exc)
 
     from puppet.mqtt.scene import (
+      looks_like_looking_bridge,
       looks_like_vision_dump,
       should_force_object_glimpse,
     )
 
+    self._looks_like_looking_bridge = looks_like_looking_bridge
     self._looks_like_vision_dump = looks_like_vision_dump
     self._should_force_object_glimpse = should_force_object_glimpse
     if not hasattr(self, "_capture_every_reply"):
@@ -1095,6 +1097,46 @@ class Orchestrator:
     logger.info("LLM <<look>> objects=%s", len(result.get("objects") or []))
     return True
 
+  def _describe_look_scene(self) -> str:
+    """Second LLM pass with the fresh CameraJSON so they hear objects this turn."""
+    ingest = self._scene_ingest or self._play_scene
+    if ingest is None:
+      return ""
+    ingest.set_inject_context(True)
+    logger.info(
+      "Look describe pass objects=%s age=%.1fs",
+      len(ingest.latest_scene().get("objects") or []),
+      ingest.scene_age_s(),
+    )
+    self._block_vision_tts = False
+    chunks: list[str] = []
+    try:
+      for token in self.llm.stream_reply(self.conversation):
+        if self._respeaker_interrupt_active:
+          logger.info("Look describe pass interrupted")
+          return ""
+        chunks.append(token)
+        self._on_llm_token(token)
+    except Exception:
+      logger.exception("Look describe pass failed")
+      return ""
+    from puppet.play.actions import parse_robot_actions
+
+    spoken, actions = parse_robot_actions("".join(chunks))
+    if "look" in actions:
+      logger.info("Look describe pass ignored extra <<look>>")
+    if not (spoken or "").strip() or self._looks_like_looking_bridge(spoken):
+      spoken = ingest.spoken_glimpse(self._vision_lang)
+    elif self._looks_like_vision_dump(spoken):
+      spoken = ingest.spoken_glimpse(self._vision_lang)
+    spoken = (spoken or "").strip()
+    if not spoken:
+      return ""
+    logger.info("Look describe: %s", spoken)
+    self._tts_pipeline.submit(spoken)
+    self._tts_pipeline.wait_done()
+    return spoken
+
   def _play_heading_error(self) -> float | None:
     """Signed DoA error for play (positive = speaker to the robot's right).
 
@@ -1238,12 +1280,15 @@ class Orchestrator:
       self._apply_llm_play_mode(motion)
     looked = False
     ingest = self._scene_ingest or self._play_scene
-    if "look" in actions:
+    want_look = "look" in actions or self._looks_like_looking_bridge(spoken)
+    if want_look:
       if self._defer_vision_tts and self._vision_fresh_this_turn:
         looked = True
         logger.info("LLM <<look>> skipped; already captured before this reply")
       else:
         looked = self._look_capture_after_reply()
+      if looked and "look" not in actions:
+        logger.info("LLM omitted <<look>>; captured after looking-bridge")
 
     replaced = False
     need_glimpse = False
@@ -1288,6 +1333,16 @@ class Orchestrator:
         motion=motion,
         looked=looked or "look" in actions,
       )
+
+    if (
+      looked
+      and not replaced
+      and self._looks_like_looking_bridge(spoken)
+      and not self._respeaker_interrupt_active
+    ):
+      described = self._describe_look_scene()
+      if described:
+        spoken = f"{spoken} {described}".strip()
 
     for item in (self._scene_ingest, self._play_scene):
       if item is not None:

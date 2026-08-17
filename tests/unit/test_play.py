@@ -71,7 +71,9 @@ def test_glimpse_not_forced_on_reverse() -> None:
     motion=False,
   ) is False
   assert looks_like_looking_bridge("Je regarde...")
+  assert looks_like_looking_bridge("I am looking.")
   assert not looks_like_looking_bridge("Je vois une chaise.")
+  assert not looks_like_looking_bridge("I see a chair.")
 
 
 def test_camera_json_only_after_look() -> None:
