@@ -55,6 +55,20 @@ def test_llm_forward_tag() -> None:
   assert "<<" not in spoken
 
 
+def test_infers_nudge_from_canned_speech_without_tag() -> None:
+  spoken, actions = parse_robot_actions("D'accord, je recule un peu.")
+  assert actions == ["back"]
+  assert "recule" in spoken
+  spoken, actions = parse_robot_actions("D'accord, j'avance un peu.")
+  assert actions == ["forward"]
+  spoken, actions = parse_robot_actions("Okay, I will roll forward a little.")
+  assert actions == ["forward"]
+  spoken, actions = parse_robot_actions("Okay, I will roll backward a little.")
+  assert actions == ["back"]
+  spoken, actions = parse_robot_actions("Coucou ! Je vais super bien, merci.")
+  assert actions == []
+
+
 def test_looks_like_vision_question() -> None:
   from puppet.mqtt.scene import (
     looks_like_vision_followup,

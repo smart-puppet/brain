@@ -1363,6 +1363,12 @@ class Orchestrator:
 
     spoken, actions = parse_robot_actions(reply or "")
     if actions:
+      if any(a in ("forward", "back") for a in actions) and not re.search(
+        r"<<\s*(forward|back|backward|recule|avance|vorwaerts)\s*>>",
+        reply or "",
+        re.IGNORECASE,
+      ):
+        logger.info("LLM omitted motion tag; inferred %s from spoken reply", actions)
       logger.info("LLM robot actions=%s", actions)
     motion = next(
       (a for a in reversed(actions) if a in ("follow", "seek", "idle", "back", "forward")),

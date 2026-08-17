@@ -50,6 +50,15 @@ _STANDING_STILL_SENTENCE_RE = re.compile(
   r"(?:already\s+)?standing still\b[^.!?]*[.!?]*"
 )
 
+# Gemma often EOS after the canned motion sentence and never writes the tag.
+# Honor that spoken line from the prompt — not the child's words.
+_SPOKEN_FORWARD_RE = re.compile(
+  r"(?iu)j['’]avance un peu|roll forward a little|fahre ein stück vor"
+)
+_SPOKEN_BACK_RE = re.compile(
+  r"(?iu)je recule un peu|roll backward a little|fahre ein stück rückwärts"
+)
+
 
 def looks_like_private_state(text: str) -> bool:
   """True if a TTS phrase is parroting BodyStatus / CameraJSON / Motion=."""
@@ -89,6 +98,13 @@ def parse_robot_actions(text: str) -> tuple[str, list[str]]:
   spoken = re.sub(r"<<[^>]*>>?", "", spoken)
   spoken = strip_private_robot_state(spoken)
   spoken = re.sub(r"\n{3,}", "\n\n", spoken).strip()
+  if "forward" not in actions and "back" not in actions:
+    fwd = list(_SPOKEN_FORWARD_RE.finditer(spoken))
+    back = list(_SPOKEN_BACK_RE.finditer(spoken))
+    if fwd or back:
+      last_fwd = fwd[-1].start() if fwd else -1
+      last_back = back[-1].start() if back else -1
+      actions.append("forward" if last_fwd >= last_back else "back")
   return spoken, actions
 
 
