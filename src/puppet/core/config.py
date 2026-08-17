@@ -247,7 +247,7 @@ def load_config(config_dir: str | Path, *, language: str | None = None) -> dict[
   if profile is not None:
     merged = _deep_merge(merged, _load_profile(config_path, str(profile)))
 
-  # language.active (eyes debug web) wins over language.yaml; missing file → German.
+  # language.active (Eye) wins over language.yaml; missing file → German.
   file_lang = read_language_active_file(config_path)
   profiles = (merged.get("language") or {}).get("profiles") or {}
   if file_lang:

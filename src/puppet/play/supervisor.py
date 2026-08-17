@@ -38,6 +38,7 @@ class PlaySupervisor:
     tick_s: float = 0.15,
     cmd_topic: str = "robot/play/cmd",
     status_topic: str = "robot/play/status",
+    speeds_topic: str = "robot/play/speeds",
     busy_fn: Optional[BusyFn] = None,
     heading_fn: Optional[Callable[[], Optional[float]]] = None,
     announce_fn: Optional[Callable[[str], None]] = None,
@@ -49,6 +50,7 @@ class PlaySupervisor:
     self._tick_s = max(0.05, float(tick_s))
     self.cmd_topic = cmd_topic
     self.status_topic = status_topic
+    self.speeds_topic = speeds_topic
     self._busy_fn = busy_fn
     self._heading_fn = heading_fn
     self._announce_fn = announce_fn
@@ -125,6 +127,29 @@ class PlaySupervisor:
       self._pending_announce = None
       return kind
 
+  def apply_speeds(self, payload: dict[str, Any]) -> dict[str, int]:
+    """Live follow-turn / seek-turn / forward from Eye sliders."""
+    from puppet.play.speeds import normalize_speeds
+
+    current = {
+      "follow_turn": self.cfg.turn_speed,
+      "seek_turn": self.cfg.seek_turn_speed,
+      "forward": self.cfg.forward_speed,
+    }
+    speeds = normalize_speeds(payload, current)
+    with self._lock:
+      self.cfg.turn_speed = speeds["follow_turn"]
+      self.cfg.seek_turn_speed = speeds["seek_turn"]
+      self.cfg.forward_speed = speeds["forward"]
+    self._drive.turn_speed = speeds["follow_turn"]
+    logger.info(
+      "Play speeds follow_turn=%s seek_turn=%s forward=%s",
+      speeds["follow_turn"],
+      speeds["seek_turn"],
+      speeds["forward"],
+    )
+    return speeds
+
   def backup_once(self) -> None:
     """Stop follow/seek, then one timed reverse nudge."""
     self.set_mode("idle", announce=False)
@@ -149,6 +174,7 @@ class PlaySupervisor:
 
     def _on_connect(c, userdata, flags, reason_code, properties=None):
       c.subscribe(self.cmd_topic, qos=1)
+      c.subscribe(self.speeds_topic, qos=1)
 
     def _on_message(c, userdata, msg):
       try:
@@ -156,6 +182,10 @@ class PlaySupervisor:
       except Exception:
         return
       if not isinstance(payload, dict):
+        return
+      topic = msg.topic or ""
+      if topic == self.speeds_topic:
+        self.apply_speeds(payload)
         return
       mode = str(payload.get("mode") or payload.get("cmd") or "").lower()
       if mode in ("stop", "idle", "follow", "seek", "back"):

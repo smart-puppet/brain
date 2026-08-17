@@ -66,7 +66,7 @@ def main(argv: list[str] | None = None) -> int:
   _configure_logging(config)
   configure_mouth_logging(config)
   logging.getLogger(__name__).info(
-    "Language %s (restart brain to apply a change from eyes debug web)",
+    "Language %s (restart brain to apply a change from Eye)",
     (config.get("language") or {}).get("active"),
   )
   _install_shutdown_signals()

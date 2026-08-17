@@ -20,5 +20,7 @@ models/*
 !models/README.md
 config/language.active
 config/language.active.tmp
+config/play.speeds
+config/play.speeds.tmp
 # Local language overlays next to config (../brain from config/); not committed
 /brain/*.yaml

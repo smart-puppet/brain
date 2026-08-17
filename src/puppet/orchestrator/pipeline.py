@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 import time
 from typing import Any
@@ -109,14 +110,10 @@ class Orchestrator:
 
     from puppet.mqtt.scene import (
       looks_like_vision_dump,
-      looks_like_vision_followup,
-      looks_like_vision_question,
       should_force_object_glimpse,
     )
 
     self._looks_like_vision_dump = looks_like_vision_dump
-    self._looks_like_vision_followup = looks_like_vision_followup
-    self._looks_like_vision_question = looks_like_vision_question
     self._should_force_object_glimpse = should_force_object_glimpse
     if not hasattr(self, "_capture_every_reply"):
       self._capture_every_reply = False
@@ -286,6 +283,17 @@ class Orchestrator:
         )
         play_scene.start()
         follow = play_cfg.get("follow", {}) or {}
+        from puppet.play.speeds import play_speeds_path, resolve_play_speeds
+
+        config_dir = (
+          os.environ.get("PUPPET_CONFIG")
+          or os.environ.get("PUPPET_CONFIG_DIR")
+          or "config"
+        )
+        speeds = resolve_play_speeds(follow, config_dir)
+        speeds_file = play_speeds_path(config_dir)
+        if self._drive is not None:
+          self._drive.turn_speed = speeds["follow_turn"]
         self._play_scene = play_scene
         self._play = PlaySupervisor(
           scene=play_scene,
@@ -294,11 +302,12 @@ class Orchestrator:
             follow_stop_m=float(follow.get("stop_m", 0.9)),
             obstacle_m=float(follow.get("obstacle_m", 0.5)),
             sector_block_m=float(follow.get("sector_block_m", 0.7)),
-            forward_speed=int(follow.get("forward_speed", 105)),
+            forward_speed=speeds["forward"],
             forward_dur_ms=int(follow.get("forward_dur_ms", 500)),
             backward_speed=int(follow.get("backward_speed", follow.get("forward_speed", 105))),
             backward_dur_ms=int(follow.get("backward_dur_ms", follow.get("forward_dur_ms", 500))),
-            turn_speed=int(follow.get("turn_speed", 125)),
+            turn_speed=speeds["follow_turn"],
+            seek_turn_speed=speeds["seek_turn"],
             turn_dur_ms=int(follow.get("turn_dur_ms", 280)),
             search_turn_dur_ms=int(follow.get("search_turn_dur_ms", 1800)),
             search_turn_ticks=int(follow.get("search_turn_ticks", 4)),
@@ -312,6 +321,7 @@ class Orchestrator:
           tick_s=float(play_cfg.get("tick_s", 0.15)),
           cmd_topic=str(mqtt_cfg.get("play_cmd_topic", "robot/play/cmd")),
           status_topic=str(mqtt_cfg.get("play_status_topic", "robot/play/status")),
+          speeds_topic=str(mqtt_cfg.get("play_speeds_topic", "robot/play/speeds")),
           busy_fn=lambda: (
             self._reply_in_progress or self.state != PipelineState.LISTENING
           ),
@@ -320,8 +330,12 @@ class Orchestrator:
         )
         self._play.start()
         logger.info(
-          "Play enabled (motion=%s) — LLM tags <<follow>>/<<seek>>/<<stop>>/<<back>> or robot/play/cmd",
+          "Play enabled (motion=%s) follow_turn=%s seek_turn=%s forward=%s from %s",
           "on" if play_cfg.get("allow_motion") else "off",
+          speeds["follow_turn"],
+          speeds["seek_turn"],
+          speeds["forward"],
+          speeds_file if speeds_file.is_file() else "yaml defaults",
         )
       except Exception as exc:  # noqa: BLE001
         logger.warning("Play supervisor disabled: %s", exc)
@@ -339,7 +353,6 @@ class Orchestrator:
     self._vision_lang = str((config.get("language") or {}).get("active") or "en")
     self._block_vision_tts = False
     self._defer_vision_tts = False
-    self._last_vision_turn = False
     self._vision_fresh_this_turn = False
     from puppet.play.actions import strip_robot_actions
 
@@ -876,11 +889,8 @@ class Orchestrator:
     self._current_reply_text = ""
     self._block_vision_tts = False
     prompt = self.conversation.draft_user.strip()
-    vision = self._looks_like_vision_question(prompt)
-    if not vision and self._last_vision_turn and self._looks_like_vision_followup(prompt):
-      vision = True
-    self._defer_vision_tts = vision
-    self._last_vision_turn = vision
+    # Gemma <<look>> drives capture after the reply. Do not regex-classify intent.
+    self._defer_vision_tts = False
     self._vision_fresh_this_turn = False
     self._reply_in_progress = True
     self._suspend_stt_for_llm()
@@ -903,11 +913,8 @@ class Orchestrator:
       self._play.set_mode("idle")
     else:
       self._maybe_face_speaker()
-    if self._defer_vision_tts:
-      logger.info("Vision question — capture before reply, hold TTS until look/glimpse")
-    else:
-      # Cached CameraJSON + body status only. Never block this audio thread on eyes.
-      self._prepare_llm_scene_cache()
+    # Cached CameraJSON + body status only. Fresh look happens after Gemma <<look>>.
+    self._prepare_llm_scene_cache()
 
     epoch = self._worker.start(
       self.conversation,
@@ -1010,6 +1017,32 @@ class Orchestrator:
     self._set_state(PipelineState.LISTENING)
     self._end_stt_turn()
     self._enter_post_reply_listen()
+
+  def _speak_if_llm_silent(
+    self,
+    spoken: str,
+    *,
+    motion: str | None,
+    looked: bool,
+  ) -> str:
+    """Gemma sometimes emits only a tag. Speak a canned line so the child is not ignored."""
+    if (spoken or "").strip():
+      return spoken
+    from puppet.play.phrases import play_phrase
+
+    if motion in ("follow", "seek", "back", "idle"):
+      kind = motion
+    elif looked:
+      return spoken
+    else:
+      kind = "ack"
+    text = play_phrase(kind, self._vision_lang)
+    if not text:
+      return spoken
+    logger.info("Empty LLM speech — saying canned %s", kind)
+    self._tts_pipeline.submit(text)
+    self._tts_pipeline.wait_done()
+    return text
 
   def _apply_llm_play_mode(self, mode: str) -> None:
     if self._play is None:
@@ -1184,14 +1217,9 @@ class Orchestrator:
       (a for a in reversed(actions) if a in ("follow", "seek", "idle", "back")),
       None,
     )
-    user_prompt = (self.conversation.draft_user or "").strip()
-    from puppet.play.actions import user_asked_to_follow, user_asked_to_seek
-
-    if motion == "follow" and not user_asked_to_follow(user_prompt):
-      logger.info("Ignoring <<follow>> (user did not ask to follow)")
-      motion = None
-    elif motion == "seek" and not user_asked_to_seek(user_prompt):
-      logger.info("Ignoring <<seek>> (user did not ask to play hide-and-seek)")
+    rolling = self._play is not None and self._play.mode in ("follow", "seek")
+    if motion == "idle" and not rolling:
+      logger.info("Ignoring <<idle>> (not following/seeking)")
       motion = None
     if motion == "back":
       self._apply_llm_backup()
@@ -1207,7 +1235,6 @@ class Orchestrator:
         looked = self._look_capture_after_reply()
 
     replaced = False
-    user_draft = self.conversation.draft_user
     need_glimpse = False
     if ingest is not None:
       need_glimpse = self._should_force_object_glimpse(
@@ -1221,7 +1248,7 @@ class Orchestrator:
           or self._looks_like_vision_dump(spoken)
         ),
         suppressed_phrases=self._worker.suppressed_phrases > 0,
-        vision_question=self._looks_like_vision_question(user_draft),
+        vision_question=looked or "look" in actions,
         motion=motion in ("follow", "seek", "idle", "back"),
       )
       if need_glimpse and ingest.has_objects() and not ingest.reply_mentions_objects(
@@ -1243,6 +1270,13 @@ class Orchestrator:
       self._tts_pipeline.submit(spoken)
       self._tts_pipeline.wait_done()
     self._defer_vision_tts = False
+
+    if not replaced:
+      spoken = self._speak_if_llm_silent(
+        spoken,
+        motion=motion,
+        looked=looked or "look" in actions,
+      )
 
     for item in (self._scene_ingest, self._play_scene):
       if item is not None:

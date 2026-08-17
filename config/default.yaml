@@ -38,6 +38,7 @@ mqtt:
   drive_stop_topic: robot/drive/stop
   play_cmd_topic: robot/play/cmd
   play_status_topic: robot/play/status
+  play_speeds_topic: robot/play/speeds
 
 # Kid play: follow a person / hide-and-seek (needs eyes + drive MQTT bridge).
 # Safety: only short dur>0 nudges; loop pauses while Kace is thinking or speaking.
@@ -54,7 +55,8 @@ play:
     forward_dur_ms: 500
     backward_speed: 105
     backward_dur_ms: 500
-    turn_speed: 125
+    turn_speed: 125           # follow / face-voice rotation (Eye slider)
+    seek_turn_speed: 125      # hide-and-seek search rotation (Eye slider)
     turn_dur_ms: 280
     search_turn_dur_ms: 1800  # finish a real pivot; several in a row before rolling
     search_turn_ticks: 4

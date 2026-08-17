@@ -214,7 +214,7 @@ Default targets:
 
 ### Language
 
-Brain reads `config/language.active` at **startup only** (`en`, `fr`, or `de`). The eyes debug web writes that file. If it is missing, the robot starts in **German**. `puppet --language fr` still overrides for that process.
+Brain reads `config/language.active` at **startup only** (`en`, `fr`, or `de`). Eye writes that file. If it is missing, the robot starts in **German**. `puppet --language fr` still overrides for that process.
 
 Each profile in `config/language/` (`en.yaml`, `fr.yaml`, `de.yaml`) configures:
 

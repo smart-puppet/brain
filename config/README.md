@@ -9,7 +9,7 @@ Puppet loads YAML from this directory and deep-merges it at startup.
    profile: respeaker   # ReSpeaker XVF3800 (default)
    # profile: regular-mic
    ```
-2. Pick a **language** in the eyes debug web (writes `config/language.active`) or run `puppet --language fr`. Missing file → German at brain start. Edit prompts in `config/language/en.yaml`, `fr.yaml`, `de.yaml`. If `../brain/de.yaml` exists, German uses that file; otherwise `language/de.yaml`.
+2. Pick a **language** in Eye (writes `config/language.active`) or run `puppet --language fr`. Missing file → German at brain start. Edit prompts in `config/language/en.yaml`, `fr.yaml`, `de.yaml`. If `../brain/de.yaml` exists, German uses that file; otherwise `language/de.yaml`.
 3. Tune hardware in `puppet.yaml` → `mouth` (servo bus, angles, sync).
 4. Everything else: only change when you know you need to (see tables below).
 
@@ -37,7 +37,8 @@ Profile files: `config/profiles/respeaker.yaml`, `config/profiles/regular-mic.ya
 | `profiles/*.yaml` | Mic-specific VAD / barge-in / ReSpeaker USB | Switching between ReSpeaker and regular mic |
 | `language/en.yaml` `fr.yaml` `de.yaml` | Persona prompts per locale | Editing Kace's voice / tags in that language |
 | `../brain/de.yaml` | Optional local German overlay (gitignored) | Local German prompt; if missing, `language/de.yaml` |
-| `language.active` | One-line `en`/`fr`/`de` (gitignored) | Eyes debug web language picker; missing → German |
+| `language.active` | One-line `en`/`fr`/`de` (gitignored) | Eye language picker; missing → German |
+| `play.speeds` | JSON follow/seek/forward (gitignored) | Eye speed sliders; live via `robot/play/speeds` |
 | `stt.yaml` | Nemotron model path, streaming chunk size, GPU suspend | STT latency, model swap |
 | `llm.yaml` | Model, context, temperature, `binding` (upstream/prism) | Reply style / model swap / LLM build |
 | `tts.yaml` | Piper threads, phrase lead-in silence | Clipped first word, CPU load |
@@ -56,7 +57,7 @@ Profile files: `config/profiles/respeaker.yaml`, `config/profiles/regular-mic.ya
 | `capture_view` | `traverse` | Eyes view mode for the capture |
 | `drive_cmd_topic` | `robot/drive/cmd` | One-shot turns when `face_speaker` is on |
 
-Requires Mosquitto + eyes debug_web (or equivalent) listening for captures.
+Requires Mosquitto + Eye (or equivalent) listening for captures.
 
 ### Face speaker (ReSpeaker DoA → drive)
 
@@ -84,8 +85,11 @@ See [movement.md](../../docs/movement.md) for the full follow / hide-and-seek de
 | `follow.obstacle_m` | `0.5` | Sidestep if something else is closer |
 | `follow.forward_dur_ms` | `500` | One roll pulse |
 | `follow.backward_dur_ms` | `500` | One reverse pulse |
+| `follow.turn_speed` | `125` | Follow / face-voice rotation (Eye **Follow turn**) |
+| `follow.seek_turn_speed` | `125` | Hide-and-seek search rotation (Eye **Seek turn**) |
+| `follow.forward_speed` | `105` | Roll speed (Eye **Forward**) |
 
-Voice: Gemma tags (`<<follow>>`, `<<seek>>`, `<<stop>>`, `<<back>>`). MQTT: `robot/play/cmd` (`follow` / `seek` / `idle` / `back`).
+Voice: Gemma tags (`<<follow>>`, `<<seek>>`, `<<stop>>`, `<<back>>`). MQTT: `robot/play/cmd` (`follow` / `seek` / `idle` / `back`). Eye sliders publish `robot/play/speeds` (live).
 
 ## Common tuning
 

@@ -69,31 +69,5 @@ _STOP_USER_RE = re.compile(
 
 
 def user_asked_to_stop(text: str) -> bool:
-  """True when the child clearly asked to stay still (any of en/fr/de)."""
+  """Safety brake while already rolling — not used to start play or classify chat."""
   return bool(text and _STOP_USER_RE.search(text.strip()))
-
-
-_FOLLOW_USER_RE = re.compile(
-  r"(?iu)("
-  r"follow\s+me|come\s+(?:here|with(?:\s+me)?|closer)|"
-  r"suis[- ]moi|viens[- ](?:ici|avec(?:\s+moi)?)|(?<!\w)viens\s*[!.?]|"
-  r"folge\s+mir|komm\s+(?:mit|her)"
-  r")"
-)
-_SEEK_USER_RE = re.compile(
-  r"(?iu)("
-  r"hide[- ]?and[- ]?seek|"
-  r"cache[- ]?cache|"
-  r"verstecken"
-  r")"
-)
-
-
-def user_asked_to_follow(text: str) -> bool:
-  """True when the child asked the robot to come/follow (not merely mentioned play)."""
-  return bool(text and _FOLLOW_USER_RE.search(text.strip()))
-
-
-def user_asked_to_seek(text: str) -> bool:
-  """True when the child asked to play hide-and-seek."""
-  return bool(text and _SEEK_USER_RE.search(text.strip()))

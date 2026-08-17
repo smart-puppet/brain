@@ -38,6 +38,11 @@ _PHRASES: dict[str, dict[str, str]] = {
     "fr": "D'accord, je recule un peu.",
     "de": "Okay, ich fahre ein Stueck zurueck.",
   },
+  "ack": {
+    "en": "Okay!",
+    "fr": "D'accord !",
+    "de": "Okay!",
+  },
   "disabled": {
     "en": "I would love to roll, but moving is switched off right now.",
     "fr": "J'aimerais bien rouler, mais le mouvement est coupe pour l'instant.",

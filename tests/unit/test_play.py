@@ -1,8 +1,6 @@
 from puppet.play.actions import (
   parse_robot_actions,
   strip_robot_actions,
-  user_asked_to_follow,
-  user_asked_to_seek,
   user_asked_to_stop,
 )
 from puppet.play.phrases import play_phrase
@@ -79,19 +77,6 @@ def test_user_asked_to_stop() -> None:
   assert not user_asked_to_stop("What is a stopwatch?")
 
 
-def test_user_asked_to_follow_or_seek() -> None:
-  assert user_asked_to_follow("Suis-moi !")
-  assert user_asked_to_follow("Follow me")
-  assert user_asked_to_follow("Komm mit")
-  assert user_asked_to_follow("Viens ici")
-  assert not user_asked_to_follow("Et maintenant.")
-  assert not user_asked_to_follow("J'aime bien jouer.")
-  assert not user_asked_to_follow("Je viens de rentrer")
-  assert user_asked_to_seek("On joue à cache-cache ?")
-  assert user_asked_to_seek("Let's play hide-and-seek")
-  assert not user_asked_to_seek("J'aime bien jouer.")
-
-
 def test_strip_robot_actions_leaves_chat() -> None:
   assert strip_robot_actions("Want to hear a story?") == "Want to hear a story?"
   assert strip_robot_actions("<<follow>>") == ""
@@ -134,6 +119,25 @@ def test_follow_avoids_closer_obstacle() -> None:
   assert nudge.reason == "avoid"
 
 
+def test_follow_and_seek_use_separate_turn_speeds() -> None:
+  follow_scene = {
+    "closest_m": 2.0,
+    "sectors": {"left": 2.0, "center": 2.0, "right": 2.0},
+    "objects": [{"label": "person", "dist_m": 2.0, "bearing": "left"}],
+  }
+  seek_scene = {
+    "closest_m": 2.0,
+    "sectors": {"left": 2.0, "center": 2.0, "right": 2.0},
+    "objects": [],
+  }
+  cfg = PlayConfig(turn_speed=180, seek_turn_speed=70)
+  follow = plan_follow(follow_scene, PlayMemory(), cfg)
+  seek = plan_seek(seek_scene, PlayMemory(), cfg)
+  assert follow.speed == 180
+  assert seek.speed == 70
+  assert seek.reason == "search"
+
+
 def test_follow_approaches_when_clear() -> None:
   scene = {
     "closest_m": 2.0,
@@ -154,6 +158,8 @@ def test_play_found_and_giveup_phrases() -> None:
   assert "zehn" in play_phrase("seek", "de").lower()
   assert "stay" in play_phrase("idle", "en").lower()
   assert "reverse" in play_phrase("back", "en").lower()
+  assert play_phrase("ack", "en")
+  assert "accord" in play_phrase("ack", "fr").lower()
 
 
 def test_seek_found_when_close() -> None:

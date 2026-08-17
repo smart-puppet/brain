@@ -22,6 +22,7 @@ class PlayConfig:
   backward_speed: int = 105
   backward_dur_ms: int = 500
   turn_speed: int = 125
+  seek_turn_speed: int = 125
   turn_dur_ms: int = 280
   search_turn_dur_ms: int = 1800
   search_turn_ticks: int = 4
@@ -166,9 +167,10 @@ def _flip_search_dir(mem: PlayMemory) -> None:
 
 
 def _search_turn(mem: PlayMemory, cfg: PlayConfig, *, reason: str) -> DriveNudge:
+  speed = cfg.seek_turn_speed if reason == "search" else cfg.turn_speed
   return DriveNudge(
     mem.search_dir,
-    speed=cfg.turn_speed,
+    speed=speed,
     dur_ms=cfg.search_turn_dur_ms,
     reason=reason,
   )

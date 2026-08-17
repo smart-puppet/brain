@@ -35,7 +35,7 @@ puppet --language fr
 puppet --language de
 ```
 
-Configuration: see **[config/README.md](config/README.md)**. Pick mic profile in `config/default.yaml` (`profile: respeaker`), language in the eyes debug web or `puppet --language fr`. Edit prompts in `config/language/`.
+Configuration: see **[config/README.md](config/README.md)**. Pick mic profile in `config/default.yaml` (`profile: respeaker`), language in Eye or `puppet --language fr`. Edit prompts in `config/language/`.
 
 ## Layout
 

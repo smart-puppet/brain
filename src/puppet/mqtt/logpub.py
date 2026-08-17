@@ -1,4 +1,4 @@
-"""Publish Python logs to MQTT so eyes debug_web can tail brain/drive."""
+"""Publish Python logs to MQTT so Eye can tail brain/drive."""
 
 from __future__ import annotations
 

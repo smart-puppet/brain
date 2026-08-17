@@ -7,6 +7,6 @@
 #   ../brain/de.yaml   (next to this config folder)
 # If it is missing, German falls back to language/de.yaml.
 #
-# Active locale is NOT set here. Eyes debug web writes language.active
+# Active locale is NOT set here. Eye writes language.active
 # (one line: en | fr | de). If that file is missing, brain starts in German.
 # Override for one run: puppet --language fr
