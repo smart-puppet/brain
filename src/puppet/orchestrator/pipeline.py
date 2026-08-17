@@ -953,21 +953,19 @@ class Orchestrator:
     return "\n".join(parts)
 
   def _prepare_llm_scene_cache(self) -> None:
-    """Inject the newest cached scene without waiting on a capture."""
+    """Inject CameraJSON. Play/drive frames do not count as 'what I see now'."""
     for ingest in (self._scene_ingest, self._play_scene):
       if ingest is not None:
         ingest.set_inject_context(False)
-    result = self._scene_for_reply(max_age_s=8.0, capture_timeout_s=0.0)
     target = self._scene_ingest or self._play_scene
-    if not result.get("ok") or target is None:
+    if target is None:
       return
-    target.apply_scene(result, age_s=float(result.get("_age_s") or 0.0))
     target.set_inject_context(True)
     logger.info(
-      "Vision cache objects=%s hint=%r age=%.1fs",
-      len(result.get("objects") or []),
-      result.get("hint"),
-      float(result.get("_age_s") or 0.0),
+      "Vision cache objects=%s from_look=%s age=%.1fs",
+      len(target.latest_scene().get("objects") or []),
+      target.from_look(),
+      target.scene_age_s(),
     )
 
   def _maybe_refresh_vision_before_llm(self) -> None:
@@ -985,7 +983,7 @@ class Orchestrator:
         item.set_inject_context(False)
     result = ingest.request_capture(timeout_s=min(float(ingest.capture_timeout_s), 8.0))
     if result.get("ok"):
-      ingest.apply_scene(result, age_s=0.0)
+      ingest.apply_scene(result, age_s=0.0, from_look=True)
       ingest.set_inject_context(True)
       self._vision_fresh_this_turn = True
       logger.info(
@@ -1085,9 +1083,9 @@ class Orchestrator:
     if not result.get("ok"):
       logger.warning("LLM <<look>> capture failed: %s", result.get("error"))
       return False
-    ingest.apply_scene(result, age_s=0.0)
+    ingest.apply_scene(result, age_s=0.0, from_look=True)
     if self._scene_ingest is not None and ingest is not self._scene_ingest:
-      self._scene_ingest.apply_scene(result, age_s=0.0)
+      self._scene_ingest.apply_scene(result, age_s=0.0, from_look=True)
     logger.info("LLM <<look>> objects=%s", len(result.get("objects") or []))
     return True
 

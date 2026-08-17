@@ -24,6 +24,7 @@ def test_llm_warmup_runs_minimal_completion() -> None:
 
   llm = LlamaLlm.__new__(LlamaLlm)
   llm._system_prompt = "You are Kace."
+  llm._vision_instructions = _VISION_INSTRUCTIONS
   llm._vision_hint_fn = None
   llm._llm = MagicMock()
   llm.warmup(max_tokens=1, prompt="Hi", stream=False)
@@ -44,6 +45,7 @@ def test_build_messages_keeps_system_frozen_and_appends_camera_to_user() -> None
 
   llm = LlamaLlm.__new__(LlamaLlm)
   llm._system_prompt = "You are Kace."
+  llm._vision_instructions = _VISION_INSTRUCTIONS
   llm._vision_hint_fn = lambda: "BodyStatus: standing still.\nCameraJSON: {\"objects\":[]}"
   conversation = Conversation()
   conversation.add_user("Hello")
@@ -61,3 +63,31 @@ def test_build_messages_keeps_system_frozen_and_appends_camera_to_user() -> None
   assert "Private: BodyStatus" in messages[3]["content"]
   assert '{"objects":[]}' in messages[3]["content"]
   assert '{"objects":[]}' not in messages[0]["content"]
+
+
+def test_vision_instructions_stay_in_one_language() -> None:
+  from puppet.llm.llama import vision_instructions
+
+  en = vision_instructions("en")
+  fr = vision_instructions("fr")
+  de = vision_instructions("de")
+  assert "encore" not in en
+  assert "Bett" not in en
+  assert "chaise" not in en
+  assert "hide-and-seek" not in fr
+  assert "Stuhl" not in fr
+  assert "cache-cache" not in de
+  assert "chaise" not in de
+  assert vision_instructions("fr-FR").startswith("L'état")
+
+
+def test_frozen_system_uses_active_language() -> None:
+  from puppet.llm.llama import LlamaLlm, vision_instructions
+
+  llm = LlamaLlm.__new__(LlamaLlm)
+  llm._system_prompt = "Tu es Kace."
+  llm._vision_instructions = vision_instructions("fr")
+  frozen = llm._frozen_system()
+  assert frozen.startswith("Tu es Kace.")
+  assert "cache-cache" in frozen
+  assert "hide-and-seek" not in frozen

@@ -2,6 +2,7 @@
 
 from .scene import (
   SceneIngest,
+  looks_like_looking_bridge,
   looks_like_vision_dump,
   looks_like_vision_followup,
   looks_like_vision_question,
@@ -10,6 +11,7 @@ from .scene import (
 
 __all__ = [
   "SceneIngest",
+  "looks_like_looking_bridge",
   "looks_like_vision_dump",
   "looks_like_vision_followup",
   "looks_like_vision_question",

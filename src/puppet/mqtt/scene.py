@@ -225,6 +225,16 @@ def looks_like_vision_followup(text: str) -> bool:
   return bool(_VISION_FOLLOWUP_RE.match((text or "").strip()))
 
 
+def looks_like_looking_bridge(text: str) -> bool:
+  """True when the spoken line is 'I am looking', not a description of objects."""
+  return bool(
+    re.search(
+      r"(?i)\b(je\s+regarde|i(?:'m|\s+am)\s+looking|ich\s+(?:schaue|gucke|sehe\s+nach))\b",
+      text or "",
+    )
+  )
+
+
 def should_force_object_glimpse(
   *,
   looked: bool,
@@ -240,11 +250,14 @@ def should_force_object_glimpse(
 
   Motion replies (reverse, follow) must not be overwritten just because
   CameraJSON was injected and the model did not name YOLO labels.
+  A looking-bridge ('Je regarde...') plus <<look>> is the intended first
+  sentence — do not replace it with a canned YOLO dump.
   """
   if motion:
     return False
-  if looked and not mentions_objects:
-    return True
+  if looked:
+    # Spoken line is 'I am looking' + <<look>>; the fresh scene is for the next sentence.
+    return False
   if not inject_context:
     return False
   if vision_dump or suppressed_phrases:
@@ -286,6 +299,8 @@ class SceneIngest:
     self._error: Optional[str] = None
     self._scene_event = threading.Event()
     self._inject_context = False
+    self._from_look = False
+    self._pending_req_id: Optional[str] = None
 
   def start(self) -> None:
     try:
@@ -340,6 +355,17 @@ class SceneIngest:
       return
     if not isinstance(payload, dict):
       return
+    req = payload.get("req_id")
+    with self._lock:
+      pending = self._pending_req_id
+    # Vision cache is for <<look>> answers. Play/nav frames must not wipe a look
+    # or Gemma will be told to look again on ordinary chat.
+    if self.name == "vision":
+      if pending:
+        if req != pending:
+          return
+      else:
+        return
     now = time.time()
     with self._lock:
       self._scene = payload
@@ -348,9 +374,12 @@ class SceneIngest:
       if isinstance(objs, list):
         self._objects = objs[:8]
       self._ts = now
+      self._from_look = False
     self._scene_event.set()
 
-  def apply_scene(self, scene: dict[str, Any], *, age_s: float = 0.0) -> None:
+  def apply_scene(
+    self, scene: dict[str, Any], *, age_s: float = 0.0, from_look: bool = False
+  ) -> None:
     """Update the cache from a scene dict (e.g. copied from the play ingest)."""
     now = time.time() - max(0.0, float(age_s))
     objs = scene.get("objects") or []
@@ -360,6 +389,7 @@ class SceneIngest:
       if isinstance(objs, list):
         self._objects = objs[:8]
       self._ts = now
+      self._from_look = bool(from_look)
 
   def latest_scene(self) -> dict[str, Any]:
     with self._lock:
@@ -387,32 +417,42 @@ class SceneIngest:
     req_id = uuid.uuid4().hex
     body = {"req_id": req_id, "view": use_view, "timeout_s": timeout}
     self._scene_event.clear()
+    with self._lock:
+      self._pending_req_id = req_id
     try:
-      self._client.publish(self.capture_topic, json.dumps(body), qos=1)
-    except Exception as exc:  # noqa: BLE001
-      return {"ok": False, "error": str(exc), "req_id": req_id}
+      try:
+        self._client.publish(self.capture_topic, json.dumps(body), qos=1)
+      except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": str(exc), "req_id": req_id}
 
-    deadline = time.time() + timeout
-    while time.time() < deadline:
+      deadline = time.time() + timeout
+      while time.time() < deadline:
+        with self._lock:
+          scene = dict(self._scene)
+        if scene.get("req_id") == req_id:
+          return {"ok": True, **scene}
+        remaining = deadline - time.time()
+        if remaining <= 0:
+          break
+        self._scene_event.wait(timeout=min(0.25, remaining))
+        self._scene_event.clear()
+
       with self._lock:
         scene = dict(self._scene)
       if scene.get("req_id") == req_id:
         return {"ok": True, **scene}
-      remaining = deadline - time.time()
-      if remaining <= 0:
-        break
-      self._scene_event.wait(timeout=min(0.25, remaining))
-      self._scene_event.clear()
+      return {
+        "ok": False,
+        "error": "capture timeout (is eyes listening on robot/nav/capture?)",
+        "req_id": req_id,
+      }
+    finally:
+      with self._lock:
+        self._pending_req_id = None
 
+  def from_look(self) -> bool:
     with self._lock:
-      scene = dict(self._scene)
-    if scene.get("req_id") == req_id:
-      return {"ok": True, **scene}
-    return {
-      "ok": False,
-      "error": "capture timeout (is eyes listening on robot/nav/capture?)",
-      "req_id": req_id,
-    }
+      return bool(self._from_look)
 
   def context_line(self) -> str:
     """Compact private camera JSON for the system prompt (not for speaking)."""
@@ -422,6 +462,11 @@ class SceneIngest:
       objects = list(self._objects)
       hint = self._hint
       age = time.time() - self._ts
+      from_look = self._from_look
+
+    # No CameraJSON on ordinary chat. Gemma looks only if they asked what it sees.
+    if (not from_look) or age > 8.0:
+      return ""
 
     # Prefer objects; omit path when objects exist so the LLM does not fixate on floor.
     # Object names stay English (YOLO); the model must translate when speaking.

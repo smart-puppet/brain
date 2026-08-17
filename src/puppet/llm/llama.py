@@ -19,27 +19,84 @@ logger = logging.getLogger(__name__)
 
 # Frozen across turns so llama.cpp can reuse the KV prefix. Mutable CameraJSON
 # / BodyStatus are appended only to the current user message.
-_VISION_INSTRUCTIONS = (
-  "Private robot state may appear at the end of the child's last message "
-  "(BodyStatus / CameraJSON). Never copy or read it aloud. "
-  "Never output CameraJSON, SEEING, PATH, RANGES, Vision, or meter readings. "
-  "Object names in CameraJSON are always English (YOLO labels). "
-  "When you speak, translate every object name into the child's spoken language "
-  "(e.g. French: bed→lit, chair→chaise, plant→plante; German: bed→Bett). "
-  "Always speak at least one short sentence to the child. Never reply with only a tag. "
-  "If they asked what you see (including now / again / encore), answer from CameraJSON "
-  "in your own short kid words, or say you are looking and add <<look>> as a hidden last line. "
-  "Only add <<follow>> when they asked you to follow, come closer, come here, or come to them "
-  "(any language, even messy speech). "
-  "Only add <<seek>> when they asked to play hide-and-seek. "
-  "Only add <<back>> when they asked you to reverse. "
-  "<<seek>> means you look for the child; you cannot hide. "
-  "Do not count to ten yourself; a separate voice does that, then you search the room. "
-  "If BodyStatus already says following or searching, do not add <<follow>> or <<seek>> again. "
-  "Only add <<stop>> or <<idle>> when they asked to stop, stay, or stand still — never on "
-  "chat like super, ok, hello, or allô. "
-  "No tag for stories or normal chat. Never say the tags out loud."
-)
+# One locale only: mixing EN/FR/DE in this block pulls Gemma into the wrong language.
+_VISION_BY_LANG: dict[str, str] = {
+  "en": (
+    "Private robot state may appear at the end of the child's last message "
+    "(BodyStatus / CameraJSON). Never copy or read it aloud. "
+    "Never output CameraJSON, SEEING, PATH, RANGES, Vision, or meter readings. "
+    "Object names in CameraJSON are always English YOLO labels. "
+    "When you speak, use simple English kid words (potted plant → plant). "
+    "Always speak at least one short sentence to the child. Never reply with only a tag. "
+    "If they asked what you see (including now / again / and there), answer from CameraJSON "
+    "objects in your own short kid words — never copy JSON aloud. "
+    "If they asked what you see and there is no CameraJSON, say you are looking "
+    "and add <<look>> as a hidden last line. Do not invent or repeat old objects. "
+    "Do not add <<look>> for greetings, thanks, or small talk. "
+    "Only add <<follow>> when they asked you to follow, come closer, come here, or come to them. "
+    "Only add <<seek>> when they asked to play hide-and-seek. "
+    "Only add <<back>> when they asked you to reverse. "
+    "<<seek>> means you look for the child; you cannot hide. "
+    "Do not count to ten yourself; a separate voice does that, then you search the room. "
+    "If BodyStatus already says following or searching, do not add <<follow>> or <<seek>> again. "
+    "Only add <<stop>> or <<idle>> when they asked to stop, stay, or stand still — never on "
+    "chat like super, ok, or hello. "
+    "No tag for stories or normal chat. Never say the tags out loud."
+  ),
+  "fr": (
+    "L'état privé du robot peut apparaître à la fin du dernier message de l'enfant "
+    "(BodyStatus / CameraJSON). Ne le copie jamais et ne le lis jamais à voix haute. "
+    "N'écris jamais CameraJSON, SEEING, PATH, RANGES, Vision, ni des mesures en mètres. "
+    "Les noms d'objets dans CameraJSON sont toujours en anglais (labels YOLO). "
+    "Quand tu parles, traduis chaque nom en français (bed→lit, chair→chaise, "
+    "plant→plante, person→personne). "
+    "Dis toujours au moins une phrase courte à l'enfant. Ne réponds jamais avec seulement une balise. "
+    "S'il a demandé ce que tu vois (y compris maintenant, encore, et là), réponds à partir des "
+    "objets CameraJSON avec tes propres mots d'enfant — ne copie jamais le JSON. "
+    "S'il a demandé ce que tu vois et qu'il n'y a pas de CameraJSON, dis que tu regardes "
+    "et ajoute <<look>> en dernière ligne cachée. N'invente pas et ne répète pas de vieux objets. "
+    "N'ajoute pas <<look>> pour un bonjour, un merci, ou du bavardage. "
+    "N'ajoute <<follow>> que s'il t'a demandé de le suivre, de venir, ou de te rapprocher. "
+    "N'ajoute <<seek>> que s'il a demandé à jouer à cache-cache. "
+    "N'ajoute <<back>> que s'il t'a demandé de reculer. "
+    "<<seek>> veut dire que TU cherches l'enfant ; tu ne peux pas te cacher. "
+    "Ne compte pas jusqu'à dix toi-même ; une autre voix le fait, puis tu cherches dans la pièce. "
+    "Si BodyStatus dit déjà que tu suis ou que tu cherches, n'ajoute pas <<follow>> ni <<seek>>. "
+    "N'ajoute <<stop>> ou <<idle>> que s'il t'a demandé de t'arrêter, de rester, "
+    "ou de ne pas bouger — jamais sur super, ok, bonjour, ou allô. "
+    "Pas de balise pour les histoires ou le chat normal. Ne dis jamais les balises à voix haute."
+  ),
+  "de": (
+    "Privater Roboterzustand kann am Ende der letzten Kind-Nachricht stehen "
+    "(BodyStatus / CameraJSON). Nie vorlesen, nie kopieren. "
+    "Nie CameraJSON, SEEING, PATH, RANGES, Vision oder Meterzahlen ausgeben. "
+    "Objektnamen in CameraJSON sind immer englische YOLO-Labels. "
+    "Beim Sprechen ins Deutsche übersetzen (bed→Bett, chair→Stuhl, plant→Pflanze, person→Person). "
+    "Immer mindestens einen kurzen Satz zum Kind sagen. Nie nur ein Tag antworten. "
+    "Wenn gefragt wird, was du siehst (auch jetzt, nochmal, und da), aus CameraJSON-Objekten "
+    "mit eigenen Kinderwörtern antworten — JSON nie vorlesen. "
+    "Wenn gefragt wird, was du siehst, und kein CameraJSON da ist, sag dass du schaust "
+    "und füge <<look>> als versteckte letzte Zeile hinzu. Keine alten Objekte erfinden oder wiederholen. "
+    "Kein <<look>> bei Hallo, Danke oder Smalltalk. "
+    "<<follow>> nur wenn sie dich bitten zu folgen, näher zu kommen, herzukommen. "
+    "<<seek>> nur beim Versteckspiel. "
+    "<<back>> nur wenn sie dich bitten rückwärts zu fahren. "
+    "<<seek>> heißt: DU suchst das Kind; du kannst dich nicht verstecken. "
+    "Nicht selbst bis zehn zählen; eine andere Stimme zählt, dann suchst du im Zimmer. "
+    "Wenn BodyStatus schon sagt dass du folgst oder suchst, kein <<follow>> oder <<seek>> nochmal. "
+    "<<stop>> oder <<idle>> nur wenn sie dich bitten zu stoppen, zu bleiben, stillzustehen "
+    "— nie bei super, ok, hallo. "
+    "Kein Tag für Geschichten oder normales Quatschen. Tags nie laut sagen."
+  ),
+}
+
+
+def vision_instructions(lang: str) -> str:
+  key = (lang or "en").strip().lower()[:2]
+  return _VISION_BY_LANG.get(key) or _VISION_BY_LANG["en"]
+
+
+_VISION_INSTRUCTIONS = _VISION_BY_LANG["en"]
 
 _TERNARY_HINT = (
   "Ternary-Bonsai Q2_0 needs llama-cpp-python built from the PrismML fork. "
@@ -114,6 +171,7 @@ class LlamaLlm(LlmBackend):
     presence_penalty: float = 0.0,
     max_tokens: int = 512,
     system_prompt: str = "",
+    language: str = "en",
   ) -> None:
     try:
       import llama_cpp  # noqa: F401
@@ -128,6 +186,7 @@ class LlamaLlm(LlmBackend):
     self._top_k = int(top_k)
     self._presence_penalty = float(presence_penalty)
     self._system_prompt = system_prompt.strip()
+    self._vision_instructions = vision_instructions(language)
     self._n_ctx = n_ctx
     self._cancelled = False
     self._last_perf: LlamaPerfStats | None = None
@@ -207,10 +266,11 @@ class LlamaLlm(LlmBackend):
 
   def _frozen_system(self) -> str:
     """Persona + static robot rules. Must not change between turns (KV prefix)."""
+    rules = getattr(self, "_vision_instructions", None) or vision_instructions("en")
     base = self._system_prompt
     if base:
-      return f"{base}\n\n{_VISION_INSTRUCTIONS}"
-    return _VISION_INSTRUCTIONS
+      return f"{base}\n\n{rules}"
+    return rules
 
   def _mutable_robot_state(self) -> str:
     if not self._vision_hint_fn:
@@ -293,6 +353,7 @@ def create_llm(config: dict[str, Any]) -> LlmBackend:
   if backend != "llama":
     raise ValueError(f"Unsupported LLM backend: {backend!r} (only 'llama' is supported)")
   validate_llama_binding(config)
+  lang = str((config.get("language") or {}).get("active") or "en")
   llm = LlamaLlm(
     model_path=llm_cfg["model_path"],
     n_ctx=llm_cfg.get("n_ctx", 8096),
@@ -308,6 +369,7 @@ def create_llm(config: dict[str, Any]) -> LlmBackend:
     presence_penalty=float(llm_cfg.get("presence_penalty", 0.0)),
     max_tokens=llm_cfg.get("max_tokens", 512),
     system_prompt=llm_cfg.get("system_prompt", ""),
+    language=lang,
   )
   if llm_cfg.get("warmup", True):
     llm.warmup(

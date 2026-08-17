@@ -38,7 +38,7 @@ def test_looks_like_vision_question() -> None:
 
 
 def test_glimpse_not_forced_on_reverse() -> None:
-  from puppet.mqtt.scene import should_force_object_glimpse
+  from puppet.mqtt.scene import looks_like_looking_bridge, should_force_object_glimpse
 
   assert should_force_object_glimpse(
     looked=False,
@@ -60,6 +60,57 @@ def test_glimpse_not_forced_on_reverse() -> None:
     vision_question=True,
     motion=False,
   ) is True
+  assert should_force_object_glimpse(
+    looked=True,
+    inject_context=True,
+    has_objects=True,
+    mentions_objects=False,
+    vision_dump=False,
+    suppressed_phrases=False,
+    vision_question=True,
+    motion=False,
+  ) is False
+  assert looks_like_looking_bridge("Je regarde...")
+  assert not looks_like_looking_bridge("Je vois une chaise.")
+
+
+def test_camera_json_only_after_look() -> None:
+  import json
+
+  from puppet.mqtt.scene import SceneIngest
+
+  ingest = SceneIngest(name="t")
+  ingest.set_inject_context(True)
+  ingest.apply_scene(
+    {"objects": [{"label": "chair", "bearing": "left", "dist_m": 1.0}]},
+    from_look=False,
+  )
+  assert ingest.context_line() == ""
+  ingest.apply_scene(
+    {"objects": [{"label": "chair", "bearing": "left", "dist_m": 1.0}]},
+    from_look=True,
+  )
+  line = ingest.context_line()
+  assert "chair" in line
+  assert "need_look" not in line
+
+  vision = SceneIngest(name="vision")
+  vision.set_inject_context(True)
+  vision.apply_scene(
+    {"objects": [{"label": "chair", "bearing": "left", "dist_m": 1.0}], "req_id": "look1"},
+    from_look=True,
+  )
+  class _Msg:
+    def __init__(self, payload: bytes) -> None:
+      self.payload = payload
+
+  vision._on_message(
+    None,
+    None,
+    _Msg(json.dumps({"objects": [{"label": "plant"}], "req_id": "nav"}).encode()),
+  )
+  assert vision.from_look()
+  assert "chair" in vision.context_line()
 
 
 def test_llm_look_and_stop_tags() -> None:
