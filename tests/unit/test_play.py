@@ -204,7 +204,7 @@ def test_seek_alternates_glance_and_roll() -> None:
     search_forward_dur_ms=900,
   )
   nudges = [plan_seek(scene, mem, cfg) for _ in range(4)]
-  assert [n.cmd for n in nudges] == ["turn_left", "forward", "turn_right", "forward"]
+  assert [n.cmd for n in nudges] == ["turn_left", "forward", "turn_left", "forward"]
   assert nudges[0].dur_ms == 500
   assert nudges[1].dur_ms == 900
 
@@ -275,7 +275,85 @@ def test_follow_lost_glances_then_rolls() -> None:
   assert first.reason == "lost"
   plan_follow(scene, mem, cfg, heading_error_deg=90)
   cmds = [plan_follow(scene, mem, cfg, heading_error_deg=90).cmd for _ in range(4)]
-  assert cmds == ["turn_left", "forward", "turn_right", "forward"]
+  assert cmds == ["turn_left", "forward", "turn_left", "forward"]
+
+
+def test_close_furniture_does_not_roll() -> None:
+  scene = {
+    "closest_m": 0.58,
+    "sectors": {"left": 4.0, "center": 4.0, "right": 4.0},
+    "floor_ahead_pct": 0.37,
+    "objects": [],
+  }
+  nudge = plan_follow(scene, PlayMemory(), PlayConfig(lost_ticks_max=0))
+  assert nudge.cmd != "forward"
+  assert nudge.reason in ("unstick", "scan", "avoid")
+
+
+def test_corner_does_not_roll_into_the_same_wall() -> None:
+  blocked = {
+    "closest_m": 0.65,
+    "sectors": {"left": 0.95, "center": 0.65, "right": 0.9},
+    "floor_ahead_pct": 0.05,
+    "objects": [],
+  }
+  barely = {
+    "closest_m": 0.90,
+    "sectors": {"left": 1.1, "center": 0.9, "right": 1.05},
+    "floor_ahead_pct": 0.13,
+    "objects": [],
+  }
+  mem = PlayMemory()
+  cfg = PlayConfig(lost_ticks_max=0, uturn_after=3, uturn_ticks=2, uturn_dur_ms=900)
+  for _ in range(6):
+    plan_follow(blocked, mem, cfg)
+  assert mem.retreats >= 1
+  nudge = plan_follow(barely, mem, cfg)
+  assert nudge.cmd != "forward"
+
+
+def test_uturn_after_repeated_retreats() -> None:
+  blocked = {
+    "closest_m": 0.65,
+    "sectors": {"left": 0.95, "center": 0.65, "right": 1.2},
+    "floor_ahead_pct": 0.04,
+    "objects": [],
+  }
+  mem = PlayMemory()
+  cfg = PlayConfig(lost_ticks_max=0, uturn_after=3, uturn_ticks=2, uturn_dur_ms=900)
+  nudges = [plan_follow(blocked, mem, cfg) for _ in range(8)]
+  uturns = [n for n in nudges if n.reason == "uturn"]
+  assert len(uturns) >= 2
+  assert uturns[0].cmd == uturns[1].cmd
+  assert uturns[0].cmd in ("turn_left", "turn_right")
+  assert uturns[0].dur_ms == 900
+  open_side = {
+    "closest_m": 2.0,
+    "sectors": {"left": 2.0, "center": 2.0, "right": 2.0},
+    "floor_ahead_pct": 0.5,
+    "objects": [],
+  }
+  escaped = plan_follow(open_side, mem, cfg)
+  assert escaped.cmd == "forward"
+  assert escaped.reason == "scan"
+
+
+def test_unstick_insists_on_one_direction() -> None:
+  blocked = {
+    "closest_m": 0.65,
+    "sectors": {"left": 1.2, "center": 0.65, "right": 0.9},
+    "floor_ahead_pct": 0.04,
+    "objects": [],
+  }
+  mem = PlayMemory()
+  cfg = PlayConfig(lost_ticks_max=0, uturn_after=3, uturn_ticks=2, uturn_dur_ms=900)
+  turns = [
+    n.cmd
+    for n in (plan_follow(blocked, mem, cfg) for _ in range(10))
+    if n.cmd.startswith("turn_")
+  ]
+  assert turns
+  assert set(turns) == {turns[0]}
 
 
 def test_low_floor_ahead_counts_as_blocked() -> None:

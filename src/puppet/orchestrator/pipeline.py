@@ -300,7 +300,7 @@ class Orchestrator:
           drive=self._drive,
           config=PlayConfig(
             follow_stop_m=float(follow.get("stop_m", 0.9)),
-            obstacle_m=float(follow.get("obstacle_m", 0.5)),
+            obstacle_m=float(follow.get("obstacle_m", 0.8)),
             sector_block_m=float(follow.get("sector_block_m", 0.7)),
             forward_speed=speeds["forward"],
             forward_dur_ms=int(follow.get("forward_dur_ms", 700)),
@@ -319,6 +319,9 @@ class Orchestrator:
             alive_jitter=float(follow.get("alive_jitter", 0.25)),
             floor_block_pct=float(follow.get("floor_block_pct", 0.12)),
             unstick_after=int(follow.get("unstick_after", 2)),
+            uturn_after=int(follow.get("uturn_after", 3)),
+            uturn_ticks=int(follow.get("uturn_ticks", 2)),
+            uturn_dur_ms=int(follow.get("uturn_dur_ms", 900)),
             min_pulse_ms=int(follow.get("min_pulse_ms", 320)),
           ),
           allow_motion=bool(play_cfg.get("allow_motion", False)),

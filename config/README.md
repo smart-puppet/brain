@@ -82,7 +82,7 @@ See [movement.md](../../docs/movement.md) for the full follow / hide-and-seek de
 | `enabled` | `true` | Background play supervisor |
 | `allow_motion` | `true` | Publish drive nudges (`false` = voice only) |
 | `follow.stop_m` | `0.9` | Stop this far from the child |
-| `follow.obstacle_m` | `0.5` | Sidestep if something else is closer |
+| `follow.obstacle_m` | `0.8` | Sidestep if something else is closer |
 | `follow.forward_dur_ms` | `700` | One roll pulse |
 | `follow.backward_dur_ms` | `500` | One reverse pulse |
 | `follow.turn_speed` | `125` | Follow / face-voice rotation (Eye **Follow turn**) |
@@ -91,6 +91,7 @@ See [movement.md](../../docs/movement.md) for the full follow / hide-and-seek de
 | `follow.alive_jitter` | `0.25` | Extra wander/peek while following or seeking (`0` = metronome) |
 | `follow.min_pulse_ms` | `320` | Floor on jittered follow/seek pulses |
 | `follow.unstick_after` | `2` | Reverse after this many blocked ticks; reverse immediately if left and right are also tight |
+| `follow.uturn_after` | `3` | Reverses without escaping a corner → U-turn toward the freer side |
 
 Voice: Gemma tags (`<<follow>>`, `<<seek>>`, `<<stop>>`, `<<back>>`). MQTT: `robot/play/cmd` (`follow` / `seek` / `idle` / `back`). Eye sliders publish `robot/play/speeds` (live).
 

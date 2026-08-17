@@ -49,7 +49,7 @@ play:
   capture_timeout_s: 8
   follow:
     stop_m: 0.9               # stay this far from the child
-    obstacle_m: 0.5           # hard stop if something else is closer
+    obstacle_m: 0.8           # hard stop if something else is closer (furniture faces sit ~0.6 m)
     sector_block_m: 0.7
     forward_speed: 105
     forward_dur_ms: 700
@@ -67,4 +67,7 @@ play:
     seek_giveup_ticks: 40     # lost captures while rolling/turning → give up
     alive_jitter: 0.25        # 0 = metronome; small wander without 200ms twitches
     unstick_after: 2          # reverse after this many blocked ticks (or immediately if both sides tight)
+    uturn_after: 3            # reverses without escaping → U-turn toward the freer side
+    uturn_ticks: 2            # consecutive long turns (then look; roll if that side is open)
+    uturn_dur_ms: 900
     min_pulse_ms: 320         # floor on jittered follow/seek pulses
