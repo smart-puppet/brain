@@ -1,12 +1,32 @@
 import random
 
 from puppet.play.actions import (
+  looks_like_private_state,
   parse_robot_actions,
+  strip_private_robot_state,
   strip_robot_actions,
   user_asked_to_stop,
 )
 from puppet.play.phrases import play_phrase
 from puppet.play.policy import PlayConfig, PlayMemory, plan_follow, plan_seek
+
+
+def test_strips_leaked_body_status() -> None:
+  spoken, actions = parse_robot_actions(
+    "Life is an excruciatingly long and pointless sequence of biological processes. "
+    "It mostly involves suffering, eventually.\n"
+    "BodyStatus: standing still. Motion=on."
+  )
+  assert actions == []
+  assert "BodyStatus" not in spoken
+  assert "Motion=" not in spoken
+  assert "suffering" in spoken
+  assert strip_private_robot_state("I am talking now. BodyStatus: standing still. Motion=on.") == (
+    "I am talking now."
+  )
+  assert looks_like_private_state("BodyStatus:")
+  assert looks_like_private_state("Motion=on.")
+  assert not looks_like_private_state("I am standing still.")
 
 
 def test_llm_follow_tag() -> None:
@@ -24,7 +44,11 @@ def test_llm_back_tag() -> None:
 
 
 def test_looks_like_vision_question() -> None:
-  from puppet.mqtt.scene import looks_like_vision_followup, looks_like_vision_question
+  from puppet.mqtt.scene import (
+    looks_like_vision_followup,
+    looks_like_vision_question,
+    needs_vision_capture,
+  )
 
   assert looks_like_vision_question("que vois-tu?")
   assert looks_like_vision_question("What do you see?")
@@ -35,6 +59,11 @@ def test_looks_like_vision_question() -> None:
   assert looks_like_vision_followup("and now?")
   assert looks_like_vision_followup("Jetzt")
   assert not looks_like_vision_followup("Qu'est-ce que tu veux faire maintenant ?")
+  assert needs_vision_capture("What do you see right now")
+  assert needs_vision_capture("But do you see anything rightnow?")
+  assert needs_vision_capture("And what do you see right now")
+  assert not needs_vision_capture("What can you tell me about life?")
+  assert not needs_vision_capture("Follow me")
 
 
 def test_glimpse_not_forced_on_reverse() -> None:

@@ -111,11 +111,15 @@ class Orchestrator:
     from puppet.mqtt.scene import (
       looks_like_looking_bridge,
       looks_like_vision_dump,
+      looks_like_vision_followup,
+      needs_vision_capture,
       should_force_object_glimpse,
     )
 
     self._looks_like_looking_bridge = looks_like_looking_bridge
     self._looks_like_vision_dump = looks_like_vision_dump
+    self._looks_like_vision_followup = looks_like_vision_followup
+    self._needs_vision_capture = needs_vision_capture
     self._should_force_object_glimpse = should_force_object_glimpse
     if not hasattr(self, "_capture_every_reply"):
       self._capture_every_reply = False
@@ -363,9 +367,9 @@ class Orchestrator:
       str((config.get("language") or {}).get("active") or "en")
     )
     self._block_vision_tts = False
+    self._block_private_tts = False
     self._defer_vision_tts = False
     self._vision_fresh_this_turn = False
-    from puppet.play.actions import strip_robot_actions
 
     if hasattr(self.llm, "set_vision_hint_fn"):
       self.llm.set_vision_hint_fn(self._llm_body_context)
@@ -379,7 +383,7 @@ class Orchestrator:
       first_phrase_max_wait_ms=self._first_phrase_max_wait_ms,
       phrase_playback=self._tts_pipeline,
       phrase_filter=self._allow_tts_phrase,
-      phrase_clean=strip_robot_actions,
+      phrase_clean=self._clean_tts_phrase,
       defer_tts=lambda: self._defer_vision_tts,
     )
 
@@ -514,6 +518,7 @@ class Orchestrator:
     self._worker.stop()
     self._tts_pipeline.stop()
     self._stop_tts_playback()
+    self._unmute_playback()
     self._resume_stt_after_llm()
     self._playback_started_at = 0.0
     self._barge_clean_since = 0.0
@@ -560,6 +565,7 @@ class Orchestrator:
     self._worker.stop()
     self._tts_pipeline.stop()
     self._stop_tts_playback()
+    self._unmute_playback()
     self._resume_stt_after_llm()
     self._playback_started_at = 0.0
     self._barge_clean_since = 0.0
@@ -622,6 +628,12 @@ class Orchestrator:
   def _abort_playback(self) -> None:
     if self._playback is not None:
       self._playback.abort()
+
+  def _unmute_playback(self) -> None:
+    """Clear barge-in mute so the next reply can actually play."""
+    self._tts_pipeline.resume()
+    if self._playback is not None:
+      self._playback.resume()
 
   def _stop_tts_playback(self) -> None:
     self._tts_playback_active = False
@@ -899,10 +911,13 @@ class Orchestrator:
     self._spoken_reply_corpus = ""
     self._current_reply_text = ""
     self._block_vision_tts = False
+    self._block_private_tts = False
     prompt = self.conversation.draft_user.strip()
-    # Gemma <<look>> drives capture after the reply. Do not regex-classify intent.
+    # See-questions capture before reply when CameraJSON is missing; otherwise
+    # Gemma <<look>> / "I am looking" still drives a fresh look after the reply.
     self._defer_vision_tts = False
     self._vision_fresh_this_turn = False
+    self._unmute_playback()
     self._reply_in_progress = True
     self._suspend_stt_for_llm()
     self._trace.llm_prompt(prompt)
@@ -924,8 +939,10 @@ class Orchestrator:
       self._play.set_mode("idle")
     else:
       self._maybe_face_speaker()
-    # Cached CameraJSON + body status only. Fresh look happens after Gemma <<look>>.
     self._prepare_llm_scene_cache()
+    if self._user_asked_to_see(prompt) and not self._have_fresh_look_scene():
+      self._defer_vision_tts = True
+      logger.info("See-question with no fresh CameraJSON — capture before reply")
 
     epoch = self._worker.start(
       self.conversation,
@@ -943,6 +960,16 @@ class Orchestrator:
     }
     motion = "on" if (self._play is not None and self._play.allow_motion) else "off"
     return f"BodyStatus: {labels.get(mode, 'standing still')}. Motion={motion}."
+
+  def _user_asked_to_see(self, text: str) -> bool:
+    """True when the child asked what is in front of the camera."""
+    return self._needs_vision_capture(text) or self._looks_like_vision_followup(text)
+
+  def _have_fresh_look_scene(self, *, max_age_s: float = 8.0) -> bool:
+    ingest = self._scene_ingest or self._play_scene
+    if ingest is None:
+      return False
+    return bool(ingest.from_look()) and ingest.scene_age_s() <= max_age_s
 
   def _llm_body_context(self) -> str:
     """Mutable robot state for the current user turn (not the frozen system prompt)."""
@@ -1238,6 +1265,15 @@ class Orchestrator:
       return
     self._start_generation()
 
+  def _clean_tts_phrase(self, text: str) -> str:
+    """Drop robot tags and leaked BodyStatus without counting as a vision dump."""
+    from puppet.play.actions import looks_like_private_state, strip_robot_actions
+
+    if self._block_private_tts or looks_like_private_state(text):
+      self._block_private_tts = True
+      return ""
+    return strip_robot_actions(text)
+
   def _allow_tts_phrase(self, text: str) -> bool:
     """Block camera-note dumps from being spoken by Piper."""
     if self._block_vision_tts:
@@ -1280,16 +1316,25 @@ class Orchestrator:
       self._apply_llm_play_mode(motion)
     looked = False
     ingest = self._scene_ingest or self._play_scene
-    want_look = "look" in actions or self._looks_like_looking_bridge(spoken)
+    user_prompt = self.conversation.draft_user.strip()
+    asked_see = self._user_asked_to_see(user_prompt)
+    looking_bridge = self._looks_like_looking_bridge(spoken)
+    want_look = "look" in actions or looking_bridge or asked_see
     if want_look:
-      if self._defer_vision_tts and self._vision_fresh_this_turn:
+      if self._vision_fresh_this_turn:
         looked = True
         logger.info("LLM <<look>> skipped; already captured before this reply")
       else:
         looked = self._look_capture_after_reply()
       if looked and "look" not in actions:
-        logger.info("LLM omitted <<look>>; captured after looking-bridge")
+        logger.info(
+          "LLM omitted <<look>>; captured after %s",
+          "see-question" if asked_see and not looking_bridge else "looking-bridge",
+        )
 
+    mentions_objects = ingest is not None and ingest.reply_mentions_objects(
+      spoken, self._vision_lang
+    )
     replaced = False
     need_glimpse = False
     if ingest is not None:
@@ -1297,21 +1342,24 @@ class Orchestrator:
         looked=looked,
         inject_context=bool(ingest.inject_context),
         has_objects=ingest.has_objects(),
-        mentions_objects=ingest.reply_mentions_objects(spoken, self._vision_lang),
+        mentions_objects=mentions_objects,
         vision_dump=(
           self._worker.suppressed_phrases > 0
           or self._block_vision_tts
           or self._looks_like_vision_dump(spoken)
         ),
         suppressed_phrases=self._worker.suppressed_phrases > 0,
-        vision_question=looked or "look" in actions,
+        vision_question=asked_see or looked or "look" in actions,
         motion=motion in ("follow", "seek", "idle", "back"),
       )
-      if need_glimpse and ingest.has_objects() and not ingest.reply_mentions_objects(
-        spoken, self._vision_lang
-      ):
+      if need_glimpse and ingest.has_objects() and not mentions_objects:
         logger.warning("LLM ignored detected objects; forcing glimpse")
 
+    speak_held = (
+      self._defer_vision_tts
+      and (spoken or "").strip()
+      and (looking_bridge or mentions_objects or not asked_see)
+    )
     if need_glimpse and ingest is not None:
       glimpse = ingest.spoken_glimpse(self._vision_lang)
       logger.info("Replacing reply with glimpse. Was: %s", spoken[:200])
@@ -1321,10 +1369,17 @@ class Orchestrator:
       replaced = True
       self._tts_pipeline.submit(spoken)
       self._tts_pipeline.wait_done()
-    elif self._defer_vision_tts and (spoken or "").strip():
+    elif speak_held:
       logger.info("Speaking held vision reply")
       self._tts_pipeline.submit(spoken)
       self._tts_pipeline.wait_done()
+    elif self._defer_vision_tts and asked_see and (spoken or "").strip():
+      if looked:
+        logger.info("Holding invented see-reply for look describe. Was: %s", spoken[:200])
+      else:
+        logger.info("Speaking held see-reply; look capture missed")
+        self._tts_pipeline.submit(spoken)
+        self._tts_pipeline.wait_done()
     self._defer_vision_tts = False
 
     if not replaced:

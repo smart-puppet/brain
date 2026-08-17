@@ -96,6 +96,7 @@ class PhraseTtsPipeline:
 
   def stop(self) -> None:
     with self._lock:
+      self._paused = False
       if not self._running:
         return
       self._stopped = True

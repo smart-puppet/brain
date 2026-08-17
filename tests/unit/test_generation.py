@@ -73,6 +73,27 @@ def test_phrase_clean_strips_robot_tags() -> None:
   assert playback.submit.call_count == 1
 
 
+def test_phrase_clean_drops_body_status_without_vision_suppress() -> None:
+  from puppet.play.actions import looks_like_private_state, strip_robot_actions
+
+  blocked = {"private": False}
+
+  def clean(text: str) -> str:
+    if blocked["private"] or looks_like_private_state(text):
+      blocked["private"] = True
+      return ""
+    return strip_robot_actions(text)
+
+  playback = MagicMock()
+  worker = _worker(phrase_playback=playback, phrase_clean=clean)
+  worker._submit_phrase("I am talking now.")
+  worker._submit_phrase("BodyStatus:")
+  worker._submit_phrase("standing still.")
+  worker._submit_phrase("Motion=on.")
+  playback.submit.assert_called_once_with("I am talking now.")
+  assert worker.suppressed_phrases == 0
+
+
 def test_pipeline_prefetches_next_phrase_while_playing() -> None:
   tts = SlowChunkTts()
   play_started = threading.Event()
@@ -97,5 +118,23 @@ def test_pipeline_prefetches_next_phrase_while_playing() -> None:
     time.sleep(0.005)
   assert tts.synth_started == ["First phrase.", "Second phrase."]
   assert play_count["n"] == 1
+  pipeline.wait_done(timeout=2.0)
+  pipeline.stop()
+
+
+def test_stop_clears_pause_even_if_pipeline_never_ran() -> None:
+  played = threading.Event()
+
+  def play_chunk(_phrase: str, _chunk: object) -> None:
+    played.set()
+
+  pipeline = PhraseTtsPipeline(
+    SlowChunkTts(),  # type: ignore[arg-type]
+    play_chunk=play_chunk,
+  )
+  pipeline.pause()
+  pipeline.stop()
+  pipeline.submit("It is a room.")
+  assert played.wait(timeout=1.0)
   pipeline.wait_done(timeout=2.0)
   pipeline.stop()

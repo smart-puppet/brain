@@ -714,6 +714,23 @@ def test_respeaker_probe_pauses_and_resumes_tts_on_noise() -> None:
   assert not orch._respeaker_interrupt_active
 
 
+def test_interrupt_cancel_unmutes_playback_for_next_reply() -> None:
+  cfg = _base_cfg()
+  orch = _with_fake_playback(
+    Orchestrator(cfg, stt=FakeStt(), llm=FakeLlm(), tts=FakeTts())
+  )
+  probe = PlaybackProbe()
+  orch._playback = probe  # type: ignore[assignment]
+  orch._reply_in_progress = True
+  orch._set_state(PipelineState.SPEAKING)
+
+  orch._pause_reply_for_interrupt_probe()
+  orch._cancel_reply_for_user_interrupt()
+
+  assert not orch._respeaker_interrupt_active
+  assert probe.resume_calls == 1
+
+
 def test_phrase_begin_does_not_resume_playback_during_interrupt_probe() -> None:
   cfg = _base_cfg()
   orch = _with_fake_playback(

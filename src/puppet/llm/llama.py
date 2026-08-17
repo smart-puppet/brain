@@ -24,7 +24,7 @@ _VISION_BY_LANG: dict[str, str] = {
   "en": (
     "Private robot state may appear at the end of the last user message "
     "(BodyStatus / CameraJSON). Never copy or read it aloud. "
-    "Never output CameraJSON, SEEING, PATH, RANGES, Vision, or meter readings. "
+    "Never output BodyStatus, Motion=, CameraJSON, SEEING, PATH, RANGES, Vision, or meter readings. "
     "Object names in CameraJSON are always English YOLO labels. "
     "When you speak, use ordinary English (potted plant → plant). "
     "Always speak at least one short sentence. Never reply with only a tag. "
@@ -46,7 +46,7 @@ _VISION_BY_LANG: dict[str, str] = {
   "fr": (
     "L'état privé du robot peut apparaître à la fin du dernier message de l'enfant "
     "(BodyStatus / CameraJSON). Ne le copie jamais et ne le lis jamais à voix haute. "
-    "N'écris jamais CameraJSON, SEEING, PATH, RANGES, Vision, ni des mesures en mètres. "
+    "N'écris jamais BodyStatus, Motion=, CameraJSON, SEEING, PATH, RANGES, Vision, ni des mesures en mètres. "
     "Les noms d'objets dans CameraJSON sont toujours en anglais (labels YOLO). "
     "Quand tu parles, traduis chaque nom en français (bed→lit, chair→chaise, "
     "plant→plante, person→personne). "
@@ -69,7 +69,7 @@ _VISION_BY_LANG: dict[str, str] = {
   "de": (
     "Privater Roboterzustand kann am Ende der letzten Kind-Nachricht stehen "
     "(BodyStatus / CameraJSON). Nie vorlesen, nie kopieren. "
-    "Nie CameraJSON, SEEING, PATH, RANGES, Vision oder Meterzahlen ausgeben. "
+    "Nie BodyStatus, Motion=, CameraJSON, SEEING, PATH, RANGES, Vision oder Meterzahlen ausgeben. "
     "Objektnamen in CameraJSON sind immer englische YOLO-Labels. "
     "Beim Sprechen ins Deutsche übersetzen (bed→Bett, chair→Stuhl, plant→Pflanze, person→Person). "
     "Immer mindestens einen kurzen Satz zum Kind sagen. Nie nur ein Tag antworten. "

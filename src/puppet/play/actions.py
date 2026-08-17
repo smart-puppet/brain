@@ -27,6 +27,31 @@ _NORM = {
   "recule": "back",
 }
 
+# Private robot state is appended to the user turn. q8 KV cache copies it
+# faithfully, so strip it from anything Piper might speak.
+_PRIVATE_SUFFIX_RE = re.compile(
+  r"(?is)(?:\n|\s)*\b(?:Private:\s*)?(?:BodyStatus|CameraJSON)\b.*\Z"
+)
+_PRIVATE_MOTION_LINE_RE = re.compile(r"(?im)^\s*Motion\s*=\s*(?:on|off)\.?\s*$")
+_PRIVATE_PHRASE_RE = re.compile(
+  r"(?i)(?:\bBodyStatus\b|\bCameraJSON\b|\bPrivate:\s*|\bMotion\s*=\s*(?:on|off))"
+)
+
+
+def looks_like_private_state(text: str) -> bool:
+  """True if a TTS phrase is parroting BodyStatus / CameraJSON / Motion=."""
+  return bool(_PRIVATE_PHRASE_RE.search(text or ""))
+
+
+def strip_private_robot_state(text: str) -> str:
+  """Drop leaked BodyStatus / CameraJSON lines from spoken LLM text."""
+  if not text:
+    return ""
+  spoken = _PRIVATE_SUFFIX_RE.sub("", text)
+  spoken = _PRIVATE_MOTION_LINE_RE.sub("", spoken)
+  spoken = re.sub(r"\n{3,}", "\n\n", spoken)
+  return spoken.strip()
+
 
 def _norm(raw: str) -> str:
   return _NORM.get(raw.strip().lower(), "")
@@ -48,6 +73,7 @@ def parse_robot_actions(text: str) -> tuple[str, list[str]]:
   spoken = _TAG_RE.sub("", text)
   spoken = _LINE_RE.sub("", spoken)
   spoken = re.sub(r"<<[^>]*>>?", "", spoken)
+  spoken = strip_private_robot_state(spoken)
   spoken = re.sub(r"\n{3,}", "\n\n", spoken).strip()
   return spoken, actions
 

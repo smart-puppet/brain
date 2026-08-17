@@ -6,6 +6,7 @@ from .scene import (
   looks_like_vision_dump,
   looks_like_vision_followup,
   looks_like_vision_question,
+  needs_vision_capture,
   should_force_object_glimpse,
 )
 
@@ -15,5 +16,6 @@ __all__ = [
   "looks_like_vision_dump",
   "looks_like_vision_followup",
   "looks_like_vision_question",
+  "needs_vision_capture",
   "should_force_object_glimpse",
 ]
