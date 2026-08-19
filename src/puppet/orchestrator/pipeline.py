@@ -12,6 +12,7 @@ from puppet.core.audio.capture import (
   AudioCapture,
   AudioPlayback,
 )
+from puppet.core.audio.buffer import RingBuffer
 from puppet.core.audio.pcm import prepend_lead_in_silence, rms_energy
 from puppet.core.audio.vad import VoiceActivityDetector, create_vad
 from puppet.core.audio.respeaker import RespeakerDoaMonitor, maybe_reset_respeaker_on_start
@@ -130,6 +131,8 @@ class Orchestrator:
     self._gate_stt = bool(vad_cfg.get("gate_stt", True))
     self._vad_enabled = bool(vad_cfg.get("enabled", True))
     self._speech_active = False
+    pre_roll_ms = int(vad_cfg.get("pre_roll_ms", 200))
+    self._stt_pre_roll = RingBuffer(self._stt_rate * pre_roll_ms // 1000)
 
     self._phrase_delimiters = puppet_cfg.get("phrase_delimiters", ".?!\n,")
     self._min_phrase_chars = int(puppet_cfg.get("min_phrase_chars", 8))
@@ -496,6 +499,7 @@ class Orchestrator:
     self._last_stt_at = 0.0
     self._stt_tail_until = 0.0
     self.stt.reset()
+    self._stt_pre_roll.clear()
     self._latency.clear_speech_window()
 
   def _speak_ready_prompt(self) -> None:
@@ -649,6 +653,14 @@ class Orchestrator:
     self._mouth_sync_active = False
     self._mouth.clear_sync()
 
+  def _flush_stt_pre_roll(self) -> None:
+    """Feed buffered pre-speech audio to STT so the decoder sees the onset."""
+    if self._stt_pre_roll.filled == 0:
+      return
+    pre = self._stt_pre_roll.read_latest(self._stt_pre_roll.filled)
+    self._stt_pre_roll.clear()
+    self.stt.feed(pre, self._stt_rate)
+
   def _process_mic_chunk(self, mic: np.ndarray, sample_rate: int) -> TranscriptSegment | None:
     return self.stt.feed(mic, sample_rate)
 
@@ -765,6 +777,7 @@ class Orchestrator:
           # New user turn only — do not reset during THINKING/SPEAKING (echo triggers VAD).
           self._latency.reset()
           self._trace.reset()
+        self._flush_stt_pre_roll()
         self.bus.emit("vad_start")
       elif event.kind == "end":
         self._speech_active = False
@@ -1677,6 +1690,8 @@ class Orchestrator:
       segment = self._process_mic_chunk(mic, sample_rate)
       if segment:
         self._on_transcript(segment)
+    else:
+      self._stt_pre_roll.write(mic)
 
     self._tick_gap()
     self._tick_stt_tail()

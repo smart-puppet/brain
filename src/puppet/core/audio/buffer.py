@@ -24,11 +24,24 @@ class RingBuffer:
   def write(self, samples: np.ndarray) -> None:
     if samples.size == 0:
       return
-    samples = samples.astype(np.float32, copy=False)
-    for sample in samples:
-      self._data[self._write_pos] = sample
-      self._write_pos = (self._write_pos + 1) % self.capacity_samples
-      self._filled = min(self._filled + 1, self.capacity_samples)
+    samples = samples.astype(np.float32, copy=False).ravel()
+    n = samples.size
+    cap = self.capacity_samples
+    if n >= cap:
+      # Only keep the last cap samples.
+      self._data[:] = samples[-cap:]
+      self._write_pos = 0
+      self._filled = cap
+      return
+    end = self._write_pos + n
+    if end <= cap:
+      self._data[self._write_pos : end] = samples
+    else:
+      first = cap - self._write_pos
+      self._data[self._write_pos : cap] = samples[:first]
+      self._data[: n - first] = samples[first:]
+    self._write_pos = end % cap
+    self._filled = min(self._filled + n, cap)
 
   def read_latest(self, n_samples: int) -> np.ndarray:
     return self.read_delayed(n_samples, delay_samples=0)
@@ -43,12 +56,15 @@ class RingBuffer:
     if n <= 0:
       return np.zeros(n_samples, dtype=np.float32)
 
-    end_idx = (self._write_pos - 1 - delay_samples) % self.capacity_samples
+    start_idx = (self._write_pos - delay_samples - n) % self.capacity_samples
     out = np.zeros(n_samples, dtype=np.float32)
     start_out = n_samples - n
-    for i in range(n):
-      idx = (end_idx - (n - 1 - i)) % self.capacity_samples
-      out[start_out + i] = self._data[idx]
+    if start_idx + n <= self.capacity_samples:
+      out[start_out:] = self._data[start_idx : start_idx + n]
+    else:
+      first = self.capacity_samples - start_idx
+      out[start_out : start_out + first] = self._data[start_idx:]
+      out[start_out + first :] = self._data[: n - first]
     return out
 
   def clear(self) -> None:
