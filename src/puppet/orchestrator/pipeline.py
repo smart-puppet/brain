@@ -1363,8 +1363,8 @@ class Orchestrator:
 
     spoken, actions = parse_robot_actions(reply or "")
     if actions:
-      if any(a in ("forward", "back") for a in actions) and not re.search(
-        r"<<\s*(forward|back|backward|recule|avance|vorwaerts)\s*>>",
+      if any(a in ("forward", "back", "idle", "seek") for a in actions) and not re.search(
+        r"<<\s*(forward|back|backward|recule|avance|vorwaerts|stop|idle|seek)\s*>>",
         reply or "",
         re.IGNORECASE,
       ):

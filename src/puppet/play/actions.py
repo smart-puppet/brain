@@ -58,6 +58,14 @@ _SPOKEN_FORWARD_RE = re.compile(
 _SPOKEN_BACK_RE = re.compile(
   r"(?iu)je recule un peu|roll backward a little|fahre ein stück rückwärts"
 )
+_SPOKEN_SEEK_RE = re.compile(
+  r"(?iu)jouer\s+[àa]\s+cache[\s-]*cache|je te cherche|"
+  r"hide[\s-]*and[\s-]*seek|i will look for you|"
+  r"verstecken\s+spielen|ich suche dich"
+)
+_SPOKEN_IDLE_RE = re.compile(
+  r"(?iu)je reste ici|i will stay here|ich bleibe hier"
+)
 
 
 def looks_like_private_state(text: str) -> bool:
@@ -105,6 +113,11 @@ def parse_robot_actions(text: str) -> tuple[str, list[str]]:
       last_fwd = fwd[-1].start() if fwd else -1
       last_back = back[-1].start() if back else -1
       actions.append("forward" if last_fwd >= last_back else "back")
+  if "seek" not in actions and "follow" not in actions and "idle" not in actions:
+    if _SPOKEN_SEEK_RE.search(spoken):
+      actions.append("seek")
+  if "idle" not in actions and _SPOKEN_IDLE_RE.search(spoken):
+    actions.append("idle")
   return spoken, actions
 
 
@@ -119,7 +132,7 @@ _STOP_USER_RE = re.compile(
   r"stop+|halt+|freeze|"
   r"stopp+|bleib(?:\s+bitte)?\s+stehen|stehen\s+bleiben|"
   r"h[oö]r\s+auf|"
-  r"arr[eê]te(?:z|s)?|reste\s+(?:ici|l[aà])"
+  r"arr[eê]t(?:er|e(?:z|s)?)?|reste\s+(?:ici|l[aà])"
   r")(?!\w)"
 )
 

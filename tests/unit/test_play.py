@@ -69,6 +69,34 @@ def test_infers_nudge_from_canned_speech_without_tag() -> None:
   assert actions == []
 
 
+def test_infers_seek_from_spoken_hide_and_seek_without_tag() -> None:
+  spoken, actions = parse_robot_actions(
+    "Oui, j'adore jouer à cache-cache avec Maignon ! C'est très amusant quand on cherche."
+  )
+  assert actions == ["seek"]
+  assert "cache-cache" in spoken
+  spoken, actions = parse_robot_actions("D'accord ! Je te cherche.")
+  assert actions == ["seek"]
+  spoken, actions = parse_robot_actions("Okay! I will look for you.")
+  assert actions == ["seek"]
+  spoken, actions = parse_robot_actions("Okay! Ich suche dich.")
+  assert actions == ["seek"]
+  spoken, actions = parse_robot_actions("Let's play hide-and-seek later maybe.")
+  assert actions == ["seek"]
+  spoken, actions = parse_robot_actions("C'est très amusant quand on cherche.")
+  assert actions == []
+
+
+def test_infers_idle_from_canned_stop_speech_without_tag() -> None:
+  spoken, actions = parse_robot_actions("D'accord, je reste ici.")
+  assert actions == ["idle"]
+  assert "reste ici" in spoken
+  spoken, actions = parse_robot_actions("Okay, I will stay here.")
+  assert actions == ["idle"]
+  spoken, actions = parse_robot_actions("Okay, ich bleibe hier.")
+  assert actions == ["idle"]
+
+
 def test_looks_like_vision_question() -> None:
   from puppet.mqtt.scene import (
     looks_like_vision_followup,
@@ -183,6 +211,8 @@ def test_user_asked_to_stop() -> None:
   assert user_asked_to_stop("Stop.")
   assert user_asked_to_stop("Bitte bleib stehen")
   assert user_asked_to_stop("Arrête !")
+  assert user_asked_to_stop("tu peux arrêter maintenant, s'il te plaît.")
+  assert user_asked_to_stop("Je veux que tu t'arrêtes.")
   assert not user_asked_to_stop("Follow me")
   assert not user_asked_to_stop("What is a stopwatch?")
 
