@@ -256,8 +256,8 @@ def test_follow_avoids_closer_obstacle() -> None:
   }
   mem = PlayMemory()
   nudge = plan_follow(scene, mem, cfg)
-  assert nudge.cmd == "turn_left"
-  assert nudge.reason == "avoid"
+  assert nudge.cmd == "backward"
+  assert nudge.reason == "unstick"
   second = plan_follow(scene, mem, cfg)
   assert second.cmd == "backward"
   assert second.reason == "unstick"
@@ -374,8 +374,8 @@ def test_seek_turns_when_path_blocked() -> None:
     "objects": [],
   }
   nudge = plan_seek(scene, PlayMemory(), PlayConfig())
-  assert nudge.cmd in ("turn_left", "turn_right")
-  assert nudge.reason == "search"
+  assert nudge.cmd == "backward"
+  assert nudge.reason == "unstick"
 
 
 def test_seek_does_not_chase_voice() -> None:
@@ -447,10 +447,10 @@ def test_corner_does_not_roll_into_the_same_wall() -> None:
     plan_follow(blocked, mem, cfg)
   assert mem.retreats >= 1
   nudge = plan_follow(barely, mem, cfg)
-  assert nudge.cmd != "forward"
+  assert nudge.cmd == "forward"
 
 
-def test_uturn_after_repeated_retreats() -> None:
+def test_repeated_stuck_keeps_reversing() -> None:
   blocked = {
     "closest_m": 0.65,
     "sectors": {"left": 0.95, "center": 0.65, "right": 1.2},
@@ -459,12 +459,9 @@ def test_uturn_after_repeated_retreats() -> None:
   }
   mem = PlayMemory()
   cfg = PlayConfig(lost_ticks_max=0, uturn_after=3, uturn_ticks=2, uturn_dur_ms=900)
-  nudges = [plan_follow(blocked, mem, cfg) for _ in range(8)]
-  uturns = [n for n in nudges if n.reason == "uturn"]
-  assert len(uturns) >= 2
-  assert uturns[0].cmd == uturns[1].cmd
-  assert uturns[0].cmd in ("turn_left", "turn_right")
-  assert uturns[0].dur_ms == 900
+  nudges = [plan_follow(blocked, mem, cfg) for _ in range(5)]
+  assert all(n.cmd == "backward" for n in nudges)
+  assert all(n.reason == "unstick" for n in nudges)
   open_side = {
     "closest_m": 2.0,
     "sectors": {"left": 2.0, "center": 2.0, "right": 2.0},
@@ -476,7 +473,7 @@ def test_uturn_after_repeated_retreats() -> None:
   assert escaped.reason == "scan"
 
 
-def test_unstick_insists_on_one_direction() -> None:
+def test_unstick_no_turn_direction_committed() -> None:
   blocked = {
     "closest_m": 0.65,
     "sectors": {"left": 1.2, "center": 0.65, "right": 0.9},
@@ -484,14 +481,10 @@ def test_unstick_insists_on_one_direction() -> None:
     "objects": [],
   }
   mem = PlayMemory()
-  cfg = PlayConfig(lost_ticks_max=0, uturn_after=3, uturn_ticks=2, uturn_dur_ms=900)
-  turns = [
-    n.cmd
-    for n in (plan_follow(blocked, mem, cfg) for _ in range(10))
-    if n.cmd.startswith("turn_")
-  ]
-  assert turns
-  assert set(turns) == {turns[0]}
+  cfg = PlayConfig(lost_ticks_max=0)
+  nudges = [plan_follow(blocked, mem, cfg) for _ in range(3)]
+  assert all(n.cmd == "backward" for n in nudges)
+  assert mem.committed_dir == ""
 
 
 def test_low_floor_ahead_counts_as_blocked() -> None:
@@ -502,8 +495,8 @@ def test_low_floor_ahead_counts_as_blocked() -> None:
     "objects": [],
   }
   nudge = plan_seek(scene, PlayMemory(), PlayConfig(floor_block_pct=0.12))
-  assert nudge.reason == "search"
-  assert nudge.cmd == "turn_left"
+  assert nudge.reason == "unstick"
+  assert nudge.cmd == "backward"
 
 
 def test_alive_jitter_still_searches() -> None:

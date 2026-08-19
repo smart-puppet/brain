@@ -188,8 +188,6 @@ def _still_trapped(
     return True
   if blocked:
     return True
-  if mem.retreats > 0:
-    return True
   return False
 
 
@@ -225,60 +223,18 @@ def _unstick(
   closest_m: Optional[float] = None,
   turn_reason: str = "avoid",
 ) -> DriveNudge:
-  """Back up, then keep turning one way until the other side is open."""
-  _commit_turn(mem, sectors, jitter=0.0)
+  """Simple recovery: reverse, then re-capture and re-plan on next tick."""
+  del sectors, closest_m, turn_reason
   mem.stuck_ticks += 1
-  tight = _both_sides_tight(sectors, cfg)
-  need_space = tight or (closest_m is not None and closest_m < 0.5)
-  committed = mem.retreats >= max(1, cfg.uturn_after)
-  speed = cfg.seek_turn_speed if turn_reason == "search" else cfg.turn_speed
-
-  if committed:
-    if need_space and mem.last_stuck != "back":
-      mem.last_stuck = "back"
-      mem.retreats += 1
-      return DriveNudge(
-        "backward",
-        speed=cfg.backward_speed,
-        dur_ms=_dur(cfg, cfg.backward_dur_ms, mem),
-        reason="unstick",
-        person=person,
-      )
-    mem.last_stuck = "uturn"
-    return DriveNudge(
-      mem.search_dir,
-      speed=speed,
-      dur_ms=_dur(cfg, cfg.uturn_dur_ms, mem),
-      reason="uturn",
-      person=person,
-    )
-
-  do_back = (
-    mem.last_stuck != "back"
-    and (tight or mem.last_stuck in ("turn", "uturn") or mem.stuck_ticks >= max(1, cfg.unstick_after))
-  )
-  if do_back:
-    mem.last_stuck = "back"
-    mem.retreats += 1
-    return DriveNudge(
-      "backward",
-      speed=cfg.backward_speed,
-      dur_ms=_dur(cfg, cfg.backward_dur_ms, mem),
-      reason="unstick",
-      person=person,
-    )
-  mem.last_stuck = "turn"
-  reason = "unstick" if mem.stuck_ticks > 1 or tight else turn_reason
-  base_dur = (
-    max(cfg.turn_dur_ms, int(cfg.search_turn_dur_ms * 0.4))
-    if mem.stuck_ticks > 1 or tight
-    else (cfg.turn_dur_ms if turn_reason != "search" else cfg.search_turn_dur_ms)
-  )
+  mem.last_stuck = "back"
+  mem.retreats += 1
+  mem.uturn_left = 0
+  mem.committed_dir = ""
   return DriveNudge(
-    mem.search_dir,
-    speed=speed,
-    dur_ms=_dur(cfg, base_dur, mem),
-    reason=reason,
+    "backward",
+    speed=cfg.backward_speed,
+    dur_ms=_dur(cfg, cfg.backward_dur_ms, mem),
+    reason="unstick",
     person=person,
   )
 
