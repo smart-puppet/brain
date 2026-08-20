@@ -3,8 +3,8 @@
 puppet:
   # --- Turn timing ---
   min_user_chars: 3
-  stt_gap_ms: 100        # quiet STT after VAD end before LLM
-  stt_tail_ms: 200       # keep feeding STT after VAD end
+  stt_gap_ms: 200        # quiet STT after VAD end before LLM
+  stt_tail_ms: 800       # keep feeding STT after VAD end (covers 320ms Nemotron chunk)
   restart_on_partial: true
 
   # --- LLM → TTS phrasing ---

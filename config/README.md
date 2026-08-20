@@ -22,8 +22,8 @@ Merge order (later wins):
 | | `respeaker` | `regular-mic` |
 |---|-------------|---------------|
 | Hardware | ReSpeaker XVF3800 (AEC + VAD on device) | Generic USB mic |
-| STT feed | Continuous (`vad.gate_stt: false`) | Gated on speech (`vad.gate_stt: true`) |
-| Barge-in | Off (`puppet.barge_in_enabled: false`) | On |
+| STT feed | Silero-gated (`vad.gate_stt: true`) | Gated on speech (`vad.gate_stt: true`) |
+| Barge-in | Silero pause-then-decode (RMS off) | On (`puppet.barge_in_enabled`) |
 | USB reset on start | Yes (needs udev permissions — see docs) | No |
 | Interrupt while speaking | Pause TTS → confirm with STT | Energy barge-in |
 

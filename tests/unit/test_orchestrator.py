@@ -435,7 +435,7 @@ def test_echo_quiet_blocks_stt_drafts() -> None:
   assert orch.conversation.draft_user == ""
 
 
-def test_unlock_fresh_speech_skips_stt_reset_while_user_speaks() -> None:
+def test_unlock_fresh_speech_resets_stt_for_clean_turn() -> None:
   cfg = _base_cfg()
   cfg["vad"] = {"enabled": True, "gate_stt": True}
   gated_vad = GatedVad()
@@ -454,7 +454,7 @@ def test_unlock_fresh_speech_skips_stt_reset_while_user_speaks() -> None:
   orch._unlock_fresh_speech()
 
   assert not orch._await_fresh_speech
-  assert fake_stt.reset_calls == resets_before
+  assert fake_stt.reset_calls == resets_before + 1
 
 
 def test_is_stt_noise_tail() -> None:
@@ -528,7 +528,7 @@ def test_stt_feeds_during_thinking_not_speaking() -> None:
   assert fake_stt.fed_chunks == 1
 
 
-def test_listening_always_feeds_stt() -> None:
+def test_listening_holds_stt_until_silero_speech() -> None:
   cfg = _base_cfg()
   cfg["vad"] = {"enabled": True, "gate_stt": True}
   gated_vad = GatedVad()
@@ -541,7 +541,12 @@ def test_listening_always_feeds_stt() -> None:
 
   gated_vad._speech = False
   orch._handle_audio_chunk(np.zeros(320, dtype=np.float32), 16000)
-  assert fake_stt.fed_chunks == 1
+  assert fake_stt.fed_chunks == 0
+
+  gated_vad._speech = True
+  orch._speech_active = True
+  orch._handle_audio_chunk(np.zeros(320, dtype=np.float32), 16000)
+  assert fake_stt.fed_chunks >= 1
 
 
 def test_stt_tail_feeds_after_vad_end() -> None:
@@ -643,7 +648,7 @@ def test_stt_tail_does_not_finalize_during_generation() -> None:
   assert fake_stt.finalize_calls == 0
 
 
-def test_vad_disabled_does_not_reset_stt_while_user_speaks() -> None:
+def test_post_reply_guard_does_not_feed_stt() -> None:
   cfg = _base_cfg()
   cfg["vad"] = {"enabled": False, "gate_stt": False}
   cfg["audio"] = {"speech_rms_threshold": 0.01}
@@ -654,30 +659,51 @@ def test_vad_disabled_does_not_reset_stt_while_user_speaks() -> None:
   assert isinstance(fake_stt, FakeStt)
   orch._set_state(PipelineState.LISTENING)
   orch._enter_post_reply_listen()
+  resets = fake_stt.reset_calls
 
   loud = np.full(320, 0.05, dtype=np.float32)
   orch._handle_audio_chunk(loud, 16000)
-  assert fake_stt.reset_calls == 1
+  assert orch._await_fresh_speech
+  assert fake_stt.reset_calls == resets
+  assert fake_stt.fed_chunks == 0
 
 
-def test_respeaker_interrupt_feeds_stt_while_speaking() -> None:
+def test_silero_speech_during_tts_pauses_then_decodes() -> None:
   cfg = _base_cfg()
-  orch = _with_fake_playback(
-    Orchestrator(cfg, stt=FakeStt(), llm=FakeLlm(), tts=FakeTts())
-  )
+  cfg["audio"] = {
+    "sample_rate": 16000,
+    "channels": 1,
+    "chunk_ms": 20,
+    "respeaker": {
+      "interrupt_while_speaking": True,
+      "interrupt_holdoff_ms": 0,
+    },
+  }
+  cfg["vad"] = {"enabled": True, "gate_stt": True}
+  cfg["puppet"]["barge_in_grace_ms"] = 0
+  gated_vad = GatedVad()
+  fake_playback = FakePlayback(busy=True)
+  orch = Orchestrator(cfg, stt=FakeStt(), llm=FakeLlm(), tts=FakeTts(), vad=gated_vad)
+  orch._tts_pipeline = fake_playback  # type: ignore[assignment]
+  orch._worker._phrase_playback = fake_playback
   fake_stt = orch.stt
   assert isinstance(fake_stt, FakeStt)
   orch._reply_in_progress = True
   orch._set_state(PipelineState.SPEAKING)
-  orch._respeaker_interrupt_active = True
-  orch._respeaker_interrupt_started_at = time.monotonic()
+  orch._tts_playback_active = True
+  orch._playback_started_at = time.monotonic() - 5.0
+  gated_vad._speech = True
+  orch._speech_active = True
 
   orch._handle_audio_chunk(np.zeros(320, dtype=np.float32), 16000)
 
-  assert fake_stt.fed_chunks == 1
+  assert orch._respeaker_interrupt_active
+  assert fake_playback.pause_calls == 1
+  assert fake_stt.fed_chunks >= 1
+  assert fake_stt.reset_calls >= 1
 
 
-def test_stt_is_fed_during_speaking_without_vad_pause() -> None:
+def test_stt_not_fed_during_speaking_until_interrupt_probe() -> None:
   cfg = _base_cfg()
   fake_playback = FakePlayback(busy=True)
   orch = Orchestrator(cfg, stt=FakeStt(), llm=FakeLlm(), tts=FakeTts())
@@ -690,7 +716,7 @@ def test_stt_is_fed_during_speaking_without_vad_pause() -> None:
 
   orch._handle_audio_chunk(np.zeros(320, dtype=np.float32), 16000)
 
-  assert fake_stt.fed_chunks == 1
+  assert fake_stt.fed_chunks == 0
   assert fake_playback.pause_calls == 0
   assert not orch._respeaker_interrupt_active
 

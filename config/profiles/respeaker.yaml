@@ -1,4 +1,4 @@
-# ReSpeaker XVF3800 — hardware AEC/VAD, continuous STT, smart interrupt.
+# ReSpeaker XVF3800 — hardware AEC/DoA, Silero-gated STT, barge-in during TTS.
 # See config/README.md
 
 audio:
@@ -6,10 +6,10 @@ audio:
     usb_reset_on_start: always   # auto | always | never
     reset_method: all            # firmware | usb_port | usb_cycle | both | all
     settle_ms: 3000
-    pause_tts_on_speech: false   # VAD-pause chopped Piper on the robot's own voice
-    interrupt_while_speaking: true  # cancel a reply when STT hears the user (not echo)
-    interrupt_timeout_ms: 1800     # if VAD-pause is on: wait ≥1 Parakeet chunk
-    interrupt_holdoff_ms: 400      # if VAD-pause is on: ignore short bleed spikes
+    pause_tts_on_speech: false   # unused: interrupt_while_speaking uses Silero holdoff
+    interrupt_while_speaking: true  # Silero during TTS → pause Piper, clean STT, decode
+    interrupt_timeout_ms: 1800     # resume TTS if the probe is not real user speech
+    interrupt_holdoff_ms: 400      # ignore short TTS-bleed spikes before pausing
     doa_debug: true              # true + logging.level DEBUG → direction logs
     doa_poll_ms: 250
     # Auto-turn chassis toward the speaker using DoA (needs drive MQTT bridge).
@@ -23,8 +23,8 @@ audio:
     doa_invert: false            # true if left/right feel mirrored
 
 vad:
-  enabled: true       # Silero: turn boundaries (not STT gating)
-  gate_stt: false     # keep Nemotron decoding continuously
+  enabled: true       # Silero: turn start/end + STT gate (keeps TTS out of Nemotron)
+  gate_stt: true      # feed Nemotron only while Silero says speech (plus STT tail)
 
 puppet:
   barge_in_enabled: false

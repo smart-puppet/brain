@@ -11,6 +11,7 @@ from puppet.core.audio.vad import (
 def test_passthrough_vad_always_speech() -> None:
   vad = PassthroughVad()
   assert vad.is_speech is True
+  assert vad.last_prob == 1.0
   assert vad.feed(np.zeros(320, dtype=np.float32)) == []
 
 
@@ -47,8 +48,10 @@ def test_streaming_iterator_detects_start_end() -> None:
   window = np.zeros(512, dtype=np.float32)
 
   assert it.process(window) is None
+  assert it._speech_prob == 0.1
   assert it.process(window) == VadEvent(kind="start")
   assert it.triggered is True
+  assert it._speech_prob == 0.9
   assert it.process(window) is None
   assert it.process(window) is None
   assert it.process(window) == VadEvent(kind="end")

@@ -29,6 +29,11 @@ class VoiceActivityDetector(ABC):
   def reset(self) -> None:
     pass
 
+  @property
+  def last_prob(self) -> float:
+    """Latest Silero speech probability, or 1.0 for passthrough."""
+    return 0.0
+
 
 class PassthroughVad(VoiceActivityDetector):
   """No-op VAD: treats all audio as speech."""
@@ -39,6 +44,10 @@ class PassthroughVad(VoiceActivityDetector):
   @property
   def is_speech(self) -> bool:
     return True
+
+  @property
+  def last_prob(self) -> float:
+    return 1.0
 
   def reset(self) -> None:
     pass
@@ -148,17 +157,20 @@ class _StreamingVadIterator:
     self.triggered = False
     self._temp_end = 0
     self._current_sample = 0
+    self._speech_prob = 0.0
 
   def reset_states(self) -> None:
     self._model.reset_states()
     self.triggered = False
     self._temp_end = 0
     self._current_sample = 0
+    self._speech_prob = 0.0
 
   def process(self, window: np.ndarray) -> VadEvent | None:
     window_size_samples = window.size
     self._current_sample += window_size_samples
     speech_prob = self._model.predict(window, self._sampling_rate)
+    self._speech_prob = float(speech_prob)
 
     if speech_prob >= self._threshold and self._temp_end:
       self._temp_end = 0
@@ -224,6 +236,10 @@ class SileroVad(VoiceActivityDetector):
   @property
   def is_speech(self) -> bool:
     return self._iterator.triggered
+
+  @property
+  def last_prob(self) -> float:
+    return float(getattr(self._iterator, "_speech_prob", 0.0))
 
   def reset(self) -> None:
     self._pending = np.zeros(0, dtype=np.float32)

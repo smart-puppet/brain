@@ -381,6 +381,7 @@ class RespeakerDoaMonitor:
     self._utterance_samples: list[int] = []
     self._last_reading: DoaReading | None = None
     self._last_azimuth: int | None = None
+    self._hw_dbg_poll = 0.0
 
   @property
   def enabled(self) -> bool:
@@ -397,6 +398,34 @@ class RespeakerDoaMonitor:
     if peeked is not None:
       return peeked
     return self._last_azimuth
+
+  @property
+  def last_speech_detected(self) -> bool | None:
+    """Firmware VAD flag from the last DoA USB read, if any."""
+    reading = self._last_reading
+    if reading is None:
+      return None
+    return bool(reading.speech_detected)
+
+  def sample_hw_speech(self) -> bool | None:
+    """Read XVF3800 speech flag without requiring Silero, and without latching DoA."""
+    if not self._track:
+      return self.last_speech_detected
+    now = time.monotonic()
+    if self._last_reading is not None and now - self._hw_dbg_poll < 0.25:
+      return self.last_speech_detected
+    if not self._ensure_usb():
+      return self.last_speech_detected
+    reading = read_doa(
+      vendor_id=self._vendor_id,
+      product_ids=(self._active_product_id,) if self._active_product_id is not None else self._product_ids,
+      dev=self._usb_dev,
+    )
+    self._hw_dbg_poll = now
+    if reading is None:
+      return self.last_speech_detected
+    self._last_reading = reading
+    return bool(reading.speech_detected)
 
   def close(self) -> None:
     _close_xvf_usb(self._usb_dev)

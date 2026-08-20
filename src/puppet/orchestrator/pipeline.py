@@ -126,12 +126,11 @@ class Orchestrator:
       self._capture_every_reply = False
 
     self._stt_rate = int(audio_cfg.get("sample_rate", 16000))
-    # ReSpeaker-first default: keep continuous decode and avoid false interruptions.
     self._barge_in = bool(puppet_cfg.get("barge_in_enabled", False))
     self._gate_stt = bool(vad_cfg.get("gate_stt", True))
     self._vad_enabled = bool(vad_cfg.get("enabled", True))
     self._speech_active = False
-    pre_roll_ms = int(vad_cfg.get("pre_roll_ms", 200))
+    pre_roll_ms = int(vad_cfg.get("pre_roll_ms", 400))
     self._stt_pre_roll = RingBuffer(self._stt_rate * pre_roll_ms // 1000)
 
     self._phrase_delimiters = puppet_cfg.get("phrase_delimiters", ".?!\n,")
@@ -150,6 +149,8 @@ class Orchestrator:
     self._barge_in_clean_rms = float(puppet_cfg.get("barge_in_clean_rms", 0.022))
     self._mic_speech_rms = float(audio_cfg.get("speech_rms_threshold", puppet_cfg.get("barge_in_clean_rms", 0.015)))
     self._last_mic_rms = 0.0
+    self._audio_dbg_t = 0.0
+    self._audio_dbg_last_key: tuple[Any, ...] | None = None
     self._barge_clean_since = 0.0
     self._echo_quiet_s = int(puppet_cfg.get("echo_quiet_ms", 2000)) / 1000.0
     self._post_reply_echo_s = int(
@@ -484,12 +485,18 @@ class Orchestrator:
     """Open the mic after post-reply echo guard without clipping an active utterance."""
     self._await_fresh_speech = False
     self.conversation.draft_user = ""
-    if not self._user_speaking_now():
-      self.stt.reset()
+    self.stt.reset()
     self._latency.clear_speech_window()
     if time.monotonic() >= self._echo_quiet_until:
       self._recent_tts_phrases.clear()
       self._spoken_reply_corpus = ""
+
+  def _begin_clean_stt_utterance(self) -> None:
+    """New user turn: drop TTS leftover in the streaming decoder, keep pre-roll."""
+    self.conversation.draft_user = ""
+    self._last_stt_at = 0.0
+    self.stt.reset()
+    self._flush_stt_pre_roll()
 
   def _enter_post_reply_listen(self) -> None:
     """Block speaker bleed from being drafted until the user speaks again."""
@@ -553,7 +560,8 @@ class Orchestrator:
     if self.state == PipelineState.SPEAKING:
       self._set_state(PipelineState.THINKING)
     self._interrupt_holdoff_since = 0.0
-    logger.info("Speech detected during reply — pausing TTS pending STT confirmation")
+    self._begin_clean_stt_utterance()
+    logger.info("Speech during TTS — paused playback, decoding barge-in")
 
   def _resume_reply_after_noise_probe(self) -> None:
     if not self._respeaker_interrupt_active:
@@ -565,6 +573,8 @@ class Orchestrator:
     self._tts_pipeline.resume()
     if self._playback is not None:
       self._playback.resume()
+    self.conversation.draft_user = ""
+    self.stt.reset()
     logger.info("Interrupt probe classified as noise — resuming reply playback")
 
   def _cancel_reply_for_user_interrupt(self) -> None:
@@ -767,24 +777,46 @@ class Orchestrator:
 
   def _handle_vad_events(self, mic: np.ndarray) -> bool:
     events = self._vad.feed(mic)
+    silero_p = float(getattr(self._vad, "last_prob", 0.0))
     for event in events:
       if event.kind == "start":
         self._speech_active = True
         self._respeaker_doa.clear_utterance()
         if self.state == PipelineState.LISTENING:
           if self._await_fresh_speech:
-            if self._tts_playback_active or time.monotonic() < self._echo_quiet_until:
+            if self._tts_playback_active or time.monotonic() < self._echo_unlock_after:
+              logger.info(
+                "audio silero START ignored (echo_quiet) p=%.2f rms=%.4f",
+                silero_p,
+                self._last_mic_rms,
+              )
               continue
             self._clear_fresh_speech_gate()
           # New user turn only — do not reset during THINKING/SPEAKING (echo triggers VAD).
           self._latency.reset()
           self._trace.reset()
-        self._flush_stt_pre_roll()
+          self._begin_clean_stt_utterance()
+        logger.info(
+          "audio silero START p=%.2f rms=%.4f state=%s → turn open",
+          silero_p,
+          self._last_mic_rms,
+          self.state.name.lower(),
+        )
+        if self.state != PipelineState.LISTENING and (
+          self._respeaker_interrupt_active or self.state == PipelineState.THINKING
+        ):
+          self._flush_stt_pre_roll()
         self.bus.emit("vad_start")
       elif event.kind == "end":
         self._speech_active = False
         self._stt_tail_until = time.monotonic() + self._stt_tail_s
         self._latency.mark_vad_end()
+        logger.info(
+          "audio silero END p=%.2f rms=%.4f state=%s → turn close (LLM after gap/tail)",
+          silero_p,
+          self._last_mic_rms,
+          self.state.name.lower(),
+        )
         self.bus.emit("vad_end")
 
     return False
@@ -792,23 +824,88 @@ class Orchestrator:
   def _should_feed_stt(self) -> bool:
     if self._respeaker_interrupt_active:
       return True
-    if self._respeaker_interrupt_enabled and self._reply_still_active():
-      return True
-    # Never transcribe during playback unless interrupt-while-speaking is on —
-    # open mic + speaker makes STT hear the bot.
+    if self._await_fresh_speech:
+      return False
+    # Never transcribe during playback unless we have paused for a barge-in probe.
     if self.state == PipelineState.SPEAKING:
       return False
-    if self.state == PipelineState.LISTENING:
-      return True
-    if self.state == PipelineState.THINKING:
-      if not self._gate_stt:
-        return True
-      return self._speech_active or self._vad.is_speech
+    if self.state == PipelineState.LISTENING and self._echo_suppresses_stt_draft():
+      return False
     if not self._gate_stt:
       return True
     if self._stt_tail_until and time.monotonic() < self._stt_tail_until:
       return True
     return self._speech_active or self._vad.is_speech
+
+  def _stt_feed_snapshot(self) -> tuple[bool, str]:
+    """Whether Nemotron will be fed, and why — no side effects."""
+    if self._stt_suspended and not self._respeaker_interrupt_active:
+      return False, "stt_suspended_llm"
+    if self._respeaker_interrupt_active:
+      return True, "interrupt_probe"
+    if self._await_fresh_speech:
+      return False, "fresh_wait"
+    if self.state == PipelineState.SPEAKING:
+      return False, "speaking"
+    if self.state == PipelineState.LISTENING and self._echo_suppresses_stt_draft():
+      return False, "echo_quiet"
+    tail = bool(self._stt_tail_until and time.monotonic() < self._stt_tail_until)
+    speech = self._speech_active or self._vad.is_speech
+    if self.state == PipelineState.LISTENING:
+      if not self._gate_stt:
+        return True, "listening"
+      if speech:
+        return True, "listening_speech"
+      if tail:
+        return True, "listening_stt_tail"
+      return False, "listening_silero_gate"
+    if self.state == PipelineState.THINKING:
+      if not self._gate_stt:
+        return True, "thinking"
+      if speech:
+        return True, "thinking_silero_speech"
+      if tail:
+        return True, "thinking_stt_tail"
+      return False, "thinking_silero_gate"
+    if not self._gate_stt:
+      return True, "ungated"
+    if tail:
+      return True, "stt_tail"
+    if speech:
+      return True, "silero_speech"
+    return False, f"state_{self.state.name.lower()}"
+
+  def _log_audio_path(self, *, stt_fed: bool, reason: str) -> None:
+    silero = bool(self._speech_active or self._vad.is_speech)
+    silero_p = float(getattr(self._vad, "last_prob", 0.0))
+    if self._await_fresh_speech:
+      echo = "fresh_wait"
+    elif self._echo_suppresses_stt_draft():
+      echo = "echo_quiet"
+    else:
+      echo = "off"
+    key = (silero, stt_fed, reason, self.state.name, echo)
+    now = time.monotonic()
+    loud = self._last_mic_rms >= 0.008
+    changed = key != self._audio_dbg_last_key
+    due = now - self._audio_dbg_t >= 0.5
+    if not changed and not (due and (loud or silero)):
+      return
+    self._audio_dbg_t = now
+    self._audio_dbg_last_key = key
+    hw = self._respeaker_doa.sample_hw_speech()
+    hw_s = "yes" if hw is True else ("no" if hw is False else "?")
+    logger.info(
+      "audio path mic_rms=%.4f silero=%s(p=%.2f) hw_vad=%s stt=%s(%s) echo=%s state=%s",
+      self._last_mic_rms,
+      "SPEECH" if silero else "silence",
+      silero_p,
+      hw_s,
+      "FEED" if stt_fed else "HOLD",
+      reason,
+      echo,
+      self.state.name.lower(),
+    )
 
   def _maybe_confirm_user_interrupt(self, text: str) -> bool:
     """True if STT during a reply is the child, not Piper echoing into the mic."""
@@ -912,6 +1009,8 @@ class Orchestrator:
       self._on_transcript(final)
     elif final and final.end_of_utterance:
       self._on_stt_eou()
+    elif self._last_stt_at <= 0:
+      logger.info("audio STT finalize empty after silero END — no transcript")
     if self._pending_stt_eou:
       self._pending_stt_eou = False
       self._on_stt_eou()
@@ -936,7 +1035,7 @@ class Orchestrator:
     self._start_generation()
 
   def _suspend_stt_for_llm(self) -> None:
-    # Keep decoding during a reply so the child can interrupt a story.
+    # Barge-in uses Silero + a paused STT probe; keep weights loaded.
     if self._respeaker_interrupt_enabled:
       return
     if not self._stt_suspend_during_llm or self._stt_suspended:
@@ -1644,12 +1743,11 @@ class Orchestrator:
       self._mark_echo_risk()
 
   def _should_process_stt(self) -> bool:
-    want_interrupt = self._respeaker_interrupt_enabled and self._reply_still_active()
     if self._stt_suspended:
-      if not self._respeaker_interrupt_active and not want_interrupt:
+      if not self._respeaker_interrupt_active:
         return False
       self._resume_stt_after_llm()
-    if self._respeaker_interrupt_active or want_interrupt:
+    if self._respeaker_interrupt_active:
       return True
     if self.state in (PipelineState.LISTENING, PipelineState.THINKING):
       return self._should_feed_stt()
@@ -1661,11 +1759,11 @@ class Orchestrator:
     self._respeaker_doa.poll(speech_active=self._user_speaking_now())
     self._unlock_fresh_speech()
     if (
-      self._pause_tts_on_speech
-      and self._respeaker_interrupt_enabled
+      self._respeaker_interrupt_enabled
       and self._reply_still_active()
       and not self._respeaker_interrupt_active
       and self._user_speaking_now()
+      and self._barge_in_allowed()
     ):
       now = time.monotonic()
       if self._interrupt_holdoff_since <= 0:
@@ -1686,13 +1784,17 @@ class Orchestrator:
         self._resume_reply_after_noise_probe()
 
     if self._tick_barge_in_cancel(mic):
+      self._log_audio_path(stt_fed=False, reason="barge_in_cancel")
       return
 
+    snap_fed, snap_reason = self._stt_feed_snapshot()
     if self._should_process_stt():
+      self._log_audio_path(stt_fed=True, reason=snap_reason if snap_fed else "listening")
       segment = self._process_mic_chunk(mic, sample_rate)
       if segment:
         self._on_transcript(segment)
     else:
+      self._log_audio_path(stt_fed=False, reason=snap_reason)
       self._stt_pre_roll.write(mic)
 
     self._tick_gap()
