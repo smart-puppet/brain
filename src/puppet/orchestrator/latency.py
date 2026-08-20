@@ -18,16 +18,22 @@ class TurnLatencyReport:
   play_ms: float
   total_ms: float
   heard_lead_in_ms: float = 0.0
+  output_latency_ms: float = 0.0
 
   @property
   def speech_to_speaker_ms(self) -> float:
-    """Last STT text → first PCM sent to the speaker (includes TTS lead-in silence)."""
+    """VAD end → first PCM write (before lead-in and the device buffer)."""
     return self.gap_ms + self.ttft_ms + self.phrase_ms
 
   @property
+  def tts_ms(self) -> float:
+    """First LLM token → first audible speech (synth + lead-in + ALSA)."""
+    return self.phrase_ms + self.heard_lead_in_ms + self.output_latency_ms
+
+  @property
   def speech_to_heard_ms(self) -> float:
-    """Last STT text → first audible speech (excludes configured TTS lead-in pad)."""
-    return self.speech_to_speaker_ms - self.heard_lead_in_ms
+    """VAD end → first audible speech. The three bar segments sum to this."""
+    return self.gap_ms + self.ttft_ms + self.tts_ms
 
   # Back-compat aliases used in tests/docs.
   @property
@@ -43,7 +49,7 @@ class TurnLatencyReport:
     return self.speech_to_speaker_ms
 
 
-def _latency_bar(stt_ms: float, llm_ms: float, tts_ms: float, width: int = 21) -> str:
+def _latency_bar(stt_ms: float, llm_ms: float, tts_ms: float, width: int = 15) -> str:
   total = stt_ms + llm_ms + tts_ms
   if total <= 0:
     return "?" * width
@@ -65,22 +71,17 @@ def format_turn_latency_line(
   *,
   llm_perf: str | None = None,
   llm_wall_ms: float | None = None,
-  bar_width: int = 21,
+  bar_width: int = 15,
 ) -> str:
-  """One-line latency bar plus optional LLM perf (same style as test_llm)."""
-  bar = _latency_bar(
-    report.gap_ms,
-    report.ttft_ms + report.phrase_ms,
-    report.play_ms,
-    bar_width,
-  )
+  """Heard latency bar: wait | llm | tts. Those three numbers sum to the headline."""
+  wait = report.gap_ms
+  llm = report.ttft_ms
+  tts = report.tts_ms
+  bar = _latency_bar(wait, llm, tts, bar_width)
   heard = report.speech_to_heard_ms
-  speaker = report.speech_to_speaker_ms
   line = (
-    f"latency heard {heard:.0f}ms (speaker {speaker:.0f}ms) [{bar}] "
-    f"gap {report.gap_ms:.0f}ms | ttft {report.ttft_ms:.0f}ms | "
-    f"phrase {report.phrase_ms:.0f}ms | play {report.play_ms:.0f}ms | "
-    f"total {report.total_ms:.0f}ms"
+    f"latency {heard:.0f}ms [{bar}]  "
+    f"wait {wait:.0f}ms | llm {llm:.0f}ms | tts {tts:.0f}ms"
   )
   if llm_wall_ms is not None:
     line = f"{line} | llm_wall {llm_wall_ms:.0f}ms"
@@ -107,6 +108,7 @@ class TurnLatencyTracker:
     self._first_tts_phrase: float | None = None
     self._first_speaker: float | None = None
     self._heard_lead_in_ms: float = 0.0
+    self._output_latency_ms: float = 0.0
     self._turn_end: float | None = None
 
   def clear_speech_window(self) -> None:
@@ -146,10 +148,10 @@ class TurnLatencyTracker:
 
   def mark_generation_start(self) -> None:
     self._generation_start = time.monotonic()
-    if self._last_stt_partial_at is not None:
-      self._utterance_end = self._last_stt_partial_at
-    elif self._vad_end is not None:
+    if self._vad_end is not None:
       self._utterance_end = self._vad_end
+    elif self._last_stt_partial_at is not None:
+      self._utterance_end = self._last_stt_partial_at
 
   def mark_llm_token(self) -> None:
     if self._first_llm_token is None:
@@ -159,16 +161,18 @@ class TurnLatencyTracker:
     if self._first_tts_phrase is None:
       self._first_tts_phrase = time.monotonic()
 
-  def mark_speaker(self, *, lead_in_ms: float = 0) -> None:
+  def mark_speaker(self, *, lead_in_ms: float = 0, output_latency_ms: float = 0) -> None:
+    """Call just before the first PCM write. Heard = this instant + pads."""
     if self._first_speaker is None:
       self._first_speaker = time.monotonic()
       self._heard_lead_in_ms = max(0.0, lead_in_ms)
+      self._output_latency_ms = max(0.0, output_latency_ms)
 
   def _speech_origin(self) -> float | None:
-    return self._utterance_end or self._vad_end or self._turn_start
+    return self._vad_end or self._utterance_end or self._turn_start
 
   def ms_speech_end_to_first_audio(self) -> float | None:
-    """Ms from last user words (or VAD end) to first speaker output."""
+    """Ms from VAD end to first speaker write."""
     origin = self._speech_origin()
     if origin is None:
       return None
@@ -181,7 +185,7 @@ class TurnLatencyTracker:
     total = self.ms_speech_end_to_first_audio()
     if total is None:
       return None
-    return max(0.0, total - self._heard_lead_in_ms)
+    return total + self._heard_lead_in_ms + self._output_latency_ms
 
   def mark_turn_end(self) -> None:
     self._turn_end = time.monotonic()
@@ -209,6 +213,7 @@ class TurnLatencyTracker:
       play_ms=play_ms,
       total_ms=total_ms,
       heard_lead_in_ms=self._heard_lead_in_ms,
+      output_latency_ms=self._output_latency_ms,
     )
 
   def ms_since_generation_start(self) -> float | None:

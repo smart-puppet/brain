@@ -6,9 +6,11 @@ audio:
   channels: 1
   input_device: null   # null = default; list: python scripts/check_mic.py --list-devices
   output_device: null
-  chunk_ms: 20
-  output_frames_per_buffer: 4096
-  output_write_chunk_frames: 1024
+  chunk_ms: 20                 # capture period; keep small (~20ms)
+  output_frames_per_buffer: 512  # PortAudio write period ~23ms at 22.05 kHz
+  output_write_chunk_frames: 256
+  output_alsa_period_ms: 20      # Pulse ALSA period on the speaker card
+  output_alsa_periods: 3         # ALSA buffer = 3 periods (~60ms); was 1s/2s
   playback_warmup_ms: 500
   speech_rms_threshold: 0.015   # used when vad.enabled: false
   respeaker:

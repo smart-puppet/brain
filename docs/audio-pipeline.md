@@ -17,8 +17,6 @@ ReSpeaker firmware already flags speech for **direction of arrival** (DoA / face
 - **Barge-in during TTS** (`audio.respeaker.interrupt_while_speaking`): Silero speech while Piper is playing → holdoff (ignore bleed) → **pause TTS**, reset STT, decode. If the text is the robot, playback resumes; if it is the user, the reply is cancelled and the new transcript is kept. RMS barge-in (`puppet.barge_in_enabled`) stays off on ReSpeaker because AEC residual is loud.
 - Chunks are buffered internally to Silero's required **512-sample windows** (32 ms at 16 kHz).
 
-Stage logs (INFO): `audio silero START/END` and periodic `audio path mic_rms=… silero=SPEECH|silence(p=…) hw_vad=yes|no stt=FEED|HOLD(reason)`.
-
 Mic-specific VAD/barge-in defaults live in `config/profiles/respeaker.yaml` or `config/profiles/regular-mic.yaml`. Silence timing in `config/vad.yaml`:
 
 | Key | Default | Description |
@@ -130,18 +128,18 @@ If you disable VAD (`vad.enabled: false`), speech detection falls back to mic RM
 | `interrupt_min_chars` | 4 | STT length to treat interrupt as real speech |
 | `interrupt_eval_ms` | 700 | Window to capture interrupt speech |
 
-After each completed reply, `run_puppet` logs one INFO line with a latency bar and LLM perf (same style as `test_llm.py`):
+After each completed reply, `run_puppet` logs one INFO line. The headline and the three bar segments are the same number (VAD end → first audible speech):
 
 ```
-latency speech→audio 1100ms [████▓▓▓░░░░░░░░░░░░] wait 400ms | ttft 500ms | buffer 200ms | play 400ms | total 1500ms | llm_wall 2353ms  |  ctx ...
+latency 1100ms [█████▓▓▓▓▓░░░]  wait 400ms | llm 500ms | tts 200ms | llm_wall 2353ms  |  ctx ...
 ```
 
-- **speech→audio** — user stopped speaking (VAD end) → first audio from the speaker (the main perceived latency)
-- **wait** — speech end → LLM request (STT tail + gap)
-- **ttft** — LLM request → first token (compare to `test_llm`)
-- **buffer** — first token → first speaker (phrase batching + Piper synth)
-- **play** — first audio → end of reply playback
-- **llm_wall** — LLM prompt + generation decode time from llama.cpp perf counters
+- **wait** (█) — Silero end → LLM request (STT tail + gap)
+- **llm** (▓) — LLM request → first token
+- **tts** (░) — first token → first audible speech (Piper + lead-in + ALSA buffer)
+- **llm_wall** — llama.cpp prompt + generation time (compare to `test_llm`)
+
+Capture uses a 20 ms ALSA period (`audio.chunk_ms`). Playback uses a 512-frame PortAudio period (~23 ms at 22.05 kHz). On start the brain reloads Pulse's ALSA card with `tsched=off` and a 20 ms period × 3 (~60 ms buffer) — Pulse otherwise opens the ReSpeaker speaker at **1 s / 2 s**. Pulse clients still use 20 ms fragments (`PULSE_LATENCY_MSEC`). Startup logs report `ALSA playback card…` and PortAudio `device_latency`.
 
 At DEBUG, the first `tts playing` trace line also shows ms since speech end.
 

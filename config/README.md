@@ -131,6 +131,8 @@ python scripts/check_mic.py --list-devices
 
 Then set `audio.input_device` in `default.yaml`.
 
+Capture period is `audio.chunk_ms` (20). PortAudio playback period is `audio.output_frames_per_buffer` (512). The actual speaker ALSA buffer is `output_alsa_period_ms` × `output_alsa_periods` (20 ms × 3). Pulse defaults to a 1 s period / 2 s buffer on the ReSpeaker; the brain reloads that card at start.
+
 ## Environment overrides
 
 `PUPPET_SECTION__KEY=value` maps to nested YAML, e.g.:

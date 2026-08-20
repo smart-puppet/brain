@@ -16,6 +16,7 @@ if str(_SCRIPTS) not in sys.path:
 
 from _runtime import configure_logging, load_puppet_config
 from puppet.core.audio import AudioPlayback, prepend_lead_in_silence
+from puppet.core.audio.alsa_latency import configure_low_latency_alsa_output
 from puppet.tts import create_tts
 
 
@@ -31,11 +32,12 @@ def main(argv: list[str] | None = None) -> int:
 
   tts = create_tts(config)
   audio_cfg = config.get("audio", {})
+  configure_low_latency_alsa_output(audio_cfg)
   playback = AudioPlayback(
     sample_rate=tts.sample_rate(),
     channels=int(audio_cfg.get("channels", 1)),
     device_index=audio_cfg.get("output_device"),
-    frames_per_buffer=int(audio_cfg.get("output_frames_per_buffer", 2048)),
+    frames_per_buffer=int(audio_cfg.get("output_frames_per_buffer", 512)),
   )
 
   one_shot = bool(args.text)

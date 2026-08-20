@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from dataclasses import dataclass
@@ -8,7 +9,6 @@ from typing import Callable, Iterator
 
 import numpy as np
 import pyaudio
-import threading
 
 from puppet.core.types import AudioChunk
 
@@ -19,6 +19,21 @@ logger = logging.getLogger(__name__)
 STT_SAMPLE_RATE = 16000
 CAPTURE_FORMAT = pyaudio.paInt16
 CAPTURE_SAMPLE_WIDTH_BYTES = 2
+# Pulse/PipeWire fragment target. PortAudio still uses defaultHigh*Latency unless
+# the daemon honors this; keep it set before any PyAudio() construction.
+_PULSE_LATENCY_MSEC = "20"
+
+
+def _prefer_short_device_buffers() -> None:
+  os.environ.setdefault("PULSE_LATENCY_MSEC", _PULSE_LATENCY_MSEC)
+
+
+def _stream_latency_ms(stream: pyaudio.Stream, *, output: bool) -> float:
+  try:
+    seconds = stream.get_output_latency() if output else stream.get_input_latency()
+  except (AttributeError, OSError):
+    return 0.0
+  return max(0.0, float(seconds) * 1000.0)
 
 
 @dataclass(frozen=True)
@@ -97,6 +112,7 @@ class AudioCapture:
     self.chunk_ms = chunk_ms
     self.chunk_samples = max(int(self.sample_rate * chunk_ms / 1000), 1)
 
+    _prefer_short_device_buffers()
     self._pa = pyaudio.PyAudio()
     self.device_index = self._resolve_device_index(device_index)
     device_info = self._pa.get_device_info_by_index(self.device_index)
@@ -128,13 +144,15 @@ class AudioCapture:
         f"at {self.sample_rate} Hz int16 mono"
       ) from exc
 
+    self._device_latency_ms = _stream_latency_ms(self._stream, output=False)
     logger.info(
-      "Mic opened: %r (index=%s) %s Hz int16 mono, chunk=%s samples (%s ms)",
+      "Mic opened: %r (index=%s) %s Hz int16 mono, period=%s frames (%s ms), device_latency=%.0fms",
       self.device_name,
       self.device_index,
       self.sample_rate,
       self.chunk_samples,
       chunk_ms,
+      self._device_latency_ms,
     )
 
   def _resolve_device_index(self, device_index: int | None) -> int:
@@ -161,8 +179,8 @@ class AudioPlayback:
     sample_rate: int,
     channels: int = 1,
     device_index: int | None = None,
-    frames_per_buffer: int = 2048,
-    write_chunk_frames: int = 1024,
+    frames_per_buffer: int = 512,
+    write_chunk_frames: int = 256,
     on_samples_committed: Callable[[], None] | None = None,
   ) -> None:
     self.sample_rate = sample_rate
@@ -181,6 +199,7 @@ class AudioPlayback:
     self._stream_anchor_time: float | None = None
     self._stream_anchor_samples = 0
     self._aborted = False
+    _prefer_short_device_buffers()
     self._pa = pyaudio.PyAudio()
     self._stream = self._pa.open(
       format=CAPTURE_FORMAT,
@@ -189,6 +208,16 @@ class AudioPlayback:
       output=True,
       output_device_index=device_index,
       frames_per_buffer=self._frames_per_buffer,
+    )
+    self._device_latency_ms = _stream_latency_ms(self._stream, output=True)
+    period_ms = self._frames_per_buffer * 1000.0 / max(1, sample_rate)
+    logger.info(
+      "Speaker opened: %s Hz, period=%d frames (%.0fms), write=%d frames, device_latency=%.0fms",
+      sample_rate,
+      self._frames_per_buffer,
+      period_ms,
+      max(1, int(write_chunk_frames)),
+      self._device_latency_ms,
     )
 
   def play_int16(self, pcm: bytes) -> None:
@@ -231,6 +260,10 @@ class AudioPlayback:
   def samples_written(self) -> int:
     with self._lock:
       return self._samples_written
+
+  def device_latency_ms(self) -> float:
+    """PortAudio output latency reported after open (ALSA/Pulse buffer)."""
+    return self._device_latency_ms
 
   def playback_position_samples(self) -> int:
     """Estimated playhead (real time), capped by samples committed to ALSA."""

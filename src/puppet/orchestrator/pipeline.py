@@ -16,6 +16,7 @@ from puppet.core.audio.buffer import RingBuffer
 from puppet.core.audio.pcm import prepend_lead_in_silence, rms_energy
 from puppet.core.audio.vad import VoiceActivityDetector, create_vad
 from puppet.core.audio.respeaker import RespeakerDoaMonitor, maybe_reset_respeaker_on_start
+from puppet.core.audio.alsa_latency import configure_low_latency_alsa_output
 from puppet.core.config import get_ready_listen_prompt, language_locale
 from puppet.core.events import EventBus
 from puppet.core.types import Conversation, PipelineState, TranscriptSegment
@@ -149,8 +150,6 @@ class Orchestrator:
     self._barge_in_clean_rms = float(puppet_cfg.get("barge_in_clean_rms", 0.022))
     self._mic_speech_rms = float(audio_cfg.get("speech_rms_threshold", puppet_cfg.get("barge_in_clean_rms", 0.015)))
     self._last_mic_rms = 0.0
-    self._audio_dbg_t = 0.0
-    self._audio_dbg_last_key: tuple[Any, ...] | None = None
     self._barge_clean_since = 0.0
     self._echo_quiet_s = int(puppet_cfg.get("echo_quiet_ms", 2000)) / 1000.0
     self._post_reply_echo_s = int(
@@ -193,8 +192,8 @@ class Orchestrator:
     audio_cfg = config.get("audio", {})
     delay_ms = mouth_cfg.get("playback_delay_ms")
     if delay_ms is None:
-      device_frames = int(audio_cfg.get("output_frames_per_buffer", 4096))
-      write_frames = int(audio_cfg.get("output_write_chunk_frames", 1024))
+      device_frames = int(audio_cfg.get("output_frames_per_buffer", 512))
+      write_frames = int(audio_cfg.get("output_write_chunk_frames", 256))
       self._mouth_playback_delay_samples = device_frames + write_frames
     else:
       self._mouth_playback_delay_samples = max(
@@ -218,6 +217,7 @@ class Orchestrator:
 
     self._capture: AudioCapture | None = None
     self._playback: AudioPlayback | None = None
+    self._audio_devices_prepared = False
     self._playback_warmed = False
     self._last_stt_at = 0.0
     self._latency = TurnLatencyTracker()
@@ -610,27 +610,37 @@ class Orchestrator:
         self._mouth.close_for_listen()
     self.bus.emit("state_changed", state=state)
 
+  def _prepare_audio_devices(self) -> None:
+    if self._audio_devices_prepared:
+      return
+    audio_cfg = self.config.get("audio", {})
+    device_index = audio_cfg.get("input_device")
+    maybe_reset_respeaker_on_start(self.config, device_index=device_index)
+    # Pulse opens the ReSpeaker speaker with a 1s ALSA period unless we reload it.
+    configure_low_latency_alsa_output(audio_cfg)
+    self._audio_devices_prepared = True
+
   def _open_capture(self) -> None:
     audio_cfg = self.config.get("audio", {})
     if self._capture is None:
-      device_index = audio_cfg.get("input_device")
-      maybe_reset_respeaker_on_start(self.config, device_index=device_index)
+      self._prepare_audio_devices()
       self._capture = AudioCapture(
         sample_rate=self._stt_rate,
         channels=int(audio_cfg.get("channels", 1)),
         chunk_ms=int(audio_cfg.get("chunk_ms", 20)),
-        device_index=device_index,
+        device_index=audio_cfg.get("input_device"),
       )
 
   def _open_playback(self) -> None:
     audio_cfg = self.config.get("audio", {})
     if self._playback is None:
+      self._prepare_audio_devices()
       self._playback = AudioPlayback(
         sample_rate=self.tts.sample_rate(),
         channels=int(audio_cfg.get("channels", 1)),
         device_index=audio_cfg.get("output_device"),
-        frames_per_buffer=int(audio_cfg.get("output_frames_per_buffer", 4096)),
-        write_chunk_frames=int(audio_cfg.get("output_write_chunk_frames", 1024)),
+        frames_per_buffer=int(audio_cfg.get("output_frames_per_buffer", 512)),
+        write_chunk_frames=int(audio_cfg.get("output_write_chunk_frames", 256)),
         on_samples_committed=self._pump_mouth_timeline,
       )
 
@@ -777,7 +787,6 @@ class Orchestrator:
 
   def _handle_vad_events(self, mic: np.ndarray) -> bool:
     events = self._vad.feed(mic)
-    silero_p = float(getattr(self._vad, "last_prob", 0.0))
     for event in events:
       if event.kind == "start":
         self._speech_active = True
@@ -785,23 +794,12 @@ class Orchestrator:
         if self.state == PipelineState.LISTENING:
           if self._await_fresh_speech:
             if self._tts_playback_active or time.monotonic() < self._echo_unlock_after:
-              logger.info(
-                "audio silero START ignored (echo_quiet) p=%.2f rms=%.4f",
-                silero_p,
-                self._last_mic_rms,
-              )
               continue
             self._clear_fresh_speech_gate()
           # New user turn only — do not reset during THINKING/SPEAKING (echo triggers VAD).
           self._latency.reset()
           self._trace.reset()
           self._begin_clean_stt_utterance()
-        logger.info(
-          "audio silero START p=%.2f rms=%.4f state=%s → turn open",
-          silero_p,
-          self._last_mic_rms,
-          self.state.name.lower(),
-        )
         if self.state != PipelineState.LISTENING and (
           self._respeaker_interrupt_active or self.state == PipelineState.THINKING
         ):
@@ -811,12 +809,6 @@ class Orchestrator:
         self._speech_active = False
         self._stt_tail_until = time.monotonic() + self._stt_tail_s
         self._latency.mark_vad_end()
-        logger.info(
-          "audio silero END p=%.2f rms=%.4f state=%s → turn close (LLM after gap/tail)",
-          silero_p,
-          self._last_mic_rms,
-          self.state.name.lower(),
-        )
         self.bus.emit("vad_end")
 
     return False
@@ -836,76 +828,6 @@ class Orchestrator:
     if self._stt_tail_until and time.monotonic() < self._stt_tail_until:
       return True
     return self._speech_active or self._vad.is_speech
-
-  def _stt_feed_snapshot(self) -> tuple[bool, str]:
-    """Whether Nemotron will be fed, and why — no side effects."""
-    if self._stt_suspended and not self._respeaker_interrupt_active:
-      return False, "stt_suspended_llm"
-    if self._respeaker_interrupt_active:
-      return True, "interrupt_probe"
-    if self._await_fresh_speech:
-      return False, "fresh_wait"
-    if self.state == PipelineState.SPEAKING:
-      return False, "speaking"
-    if self.state == PipelineState.LISTENING and self._echo_suppresses_stt_draft():
-      return False, "echo_quiet"
-    tail = bool(self._stt_tail_until and time.monotonic() < self._stt_tail_until)
-    speech = self._speech_active or self._vad.is_speech
-    if self.state == PipelineState.LISTENING:
-      if not self._gate_stt:
-        return True, "listening"
-      if speech:
-        return True, "listening_speech"
-      if tail:
-        return True, "listening_stt_tail"
-      return False, "listening_silero_gate"
-    if self.state == PipelineState.THINKING:
-      if not self._gate_stt:
-        return True, "thinking"
-      if speech:
-        return True, "thinking_silero_speech"
-      if tail:
-        return True, "thinking_stt_tail"
-      return False, "thinking_silero_gate"
-    if not self._gate_stt:
-      return True, "ungated"
-    if tail:
-      return True, "stt_tail"
-    if speech:
-      return True, "silero_speech"
-    return False, f"state_{self.state.name.lower()}"
-
-  def _log_audio_path(self, *, stt_fed: bool, reason: str) -> None:
-    silero = bool(self._speech_active or self._vad.is_speech)
-    silero_p = float(getattr(self._vad, "last_prob", 0.0))
-    if self._await_fresh_speech:
-      echo = "fresh_wait"
-    elif self._echo_suppresses_stt_draft():
-      echo = "echo_quiet"
-    else:
-      echo = "off"
-    key = (silero, stt_fed, reason, self.state.name, echo)
-    now = time.monotonic()
-    loud = self._last_mic_rms >= 0.008
-    changed = key != self._audio_dbg_last_key
-    due = now - self._audio_dbg_t >= 0.5
-    if not changed and not (due and (loud or silero)):
-      return
-    self._audio_dbg_t = now
-    self._audio_dbg_last_key = key
-    hw = self._respeaker_doa.sample_hw_speech()
-    hw_s = "yes" if hw is True else ("no" if hw is False else "?")
-    logger.info(
-      "audio path mic_rms=%.4f silero=%s(p=%.2f) hw_vad=%s stt=%s(%s) echo=%s state=%s",
-      self._last_mic_rms,
-      "SPEECH" if silero else "silence",
-      silero_p,
-      hw_s,
-      "FEED" if stt_fed else "HOLD",
-      reason,
-      echo,
-      self.state.name.lower(),
-    )
 
   def _maybe_confirm_user_interrupt(self, text: str) -> bool:
     """True if STT during a reply is the child, not Piper echoing into the mic."""
@@ -1009,8 +931,6 @@ class Orchestrator:
       self._on_transcript(final)
     elif final and final.end_of_utterance:
       self._on_stt_eou()
-    elif self._last_stt_at <= 0:
-      logger.info("audio STT finalize empty after silero END — no transcript")
     if self._pending_stt_eou:
       self._pending_stt_eou = False
       self._on_stt_eou()
@@ -1722,14 +1642,17 @@ class Orchestrator:
       self._mark_echo_risk()
       if self.state != PipelineState.SPEAKING:
         self._set_state(PipelineState.SPEAKING)
+      output_ms = 0.0
+      latency_fn = getattr(self._playback, "device_latency_ms", None)
+      if callable(latency_fn):
+        output_ms = float(latency_fn())
+      self._latency.mark_speaker(lead_in_ms=lead_in_ms, output_latency_ms=output_ms)
+      self._trace.tts_playing(phrase)
+      self._tts_logged_current = True
     pcm = np.clip(samples * 32767.0, -32768, 32767).astype(np.int16).tobytes()
     self._playback.play_int16(pcm)
     self._mouth.pump_timeline(self._playback)
     self._mouth_reply_samples += int(samples.size)
-    if first_chunk:
-      self._latency.mark_speaker(lead_in_ms=lead_in_ms)
-      self._trace.tts_playing(phrase)
-      self._tts_logged_current = True
 
   def _on_tts_phrase_end(self, _phrase: str) -> None:
     self._mouth.on_phrase_end()
@@ -1784,17 +1707,13 @@ class Orchestrator:
         self._resume_reply_after_noise_probe()
 
     if self._tick_barge_in_cancel(mic):
-      self._log_audio_path(stt_fed=False, reason="barge_in_cancel")
       return
 
-    snap_fed, snap_reason = self._stt_feed_snapshot()
     if self._should_process_stt():
-      self._log_audio_path(stt_fed=True, reason=snap_reason if snap_fed else "listening")
       segment = self._process_mic_chunk(mic, sample_rate)
       if segment:
         self._on_transcript(segment)
     else:
-      self._log_audio_path(stt_fed=False, reason=snap_reason)
       self._stt_pre_roll.write(mic)
 
     self._tick_gap()
