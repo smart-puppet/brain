@@ -343,7 +343,7 @@ class PlaySupervisor:
       )
       self._apply(nudge)
       self._publish_status()
-      if nudge.reason in ("found", "giveup"):
+      if nudge.reason in ("found", "giveup", "nofollow"):
         self.set_mode("idle", announce=False)
         if self._announce_fn is not None:
           try:

@@ -332,6 +332,9 @@ class Orchestrator:
             lost_ticks_max=int(follow.get("lost_ticks", 2)),
             found_m=float(follow.get("found_m", 2.0)),
             seek_giveup_ticks=int(follow.get("seek_giveup_ticks", 24)),
+            turn_ms_per_deg=int(follow.get("turn_ms_per_deg", 8)),
+            follow_spin_deg=int(follow.get("follow_spin_deg", 360)),
+            follow_recover_deg=int(follow.get("follow_recover_deg", 180)),
             alive_jitter=float(follow.get("alive_jitter", 0.25)),
             floor_block_pct=float(follow.get("floor_block_pct", 0.12)),
             unstick_after=int(follow.get("unstick_after", 2)),
@@ -1100,7 +1103,7 @@ class Orchestrator:
 
   def _announce_play_event(self, reason: str) -> None:
     """Speak a canned line for play start/stop/found (Piper; no LLM)."""
-    if reason not in ("found", "giveup", "seek"):
+    if reason not in ("found", "giveup", "seek", "nofollow"):
       return
     from puppet.play.phrases import play_phrase
 

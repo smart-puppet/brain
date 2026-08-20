@@ -248,14 +248,75 @@ def test_follow_stops_when_close() -> None:
 
 
 def test_follow_stops_when_legs_lose_person_box() -> None:
+  mem = PlayMemory()
+  cfg = PlayConfig(follow_stop_m=1.5)
+  plan_follow(
+    {
+      "closest_m": 1.4,
+      "sectors": {"left": 1.6, "center": 1.4, "right": 1.6},
+      "objects": [{"label": "person", "dist_m": 1.4, "bearing": "center"}],
+    },
+    mem,
+    cfg,
+  )
   scene = {
     "closest_m": 1.2,
     "sectors": {"left": 1.4, "center": 1.2, "right": 1.4},
     "objects": [],
   }
-  nudge = plan_follow(scene, PlayMemory(), PlayConfig(follow_stop_m=1.5))
+  nudge = plan_follow(scene, mem, cfg)
   assert nudge.cmd == "idle"
   assert nudge.reason == "close"
+
+
+def test_follow_remembers_exit_side_after_centering() -> None:
+  cfg = PlayConfig(lost_ticks_max=2, turn_ms_per_deg=10, follow_recover_deg=180, search_turn_dur_ms=400)
+  mem = PlayMemory()
+  left = {
+    "closest_m": 2.0,
+    "sectors": {"left": 2.0, "center": 2.0, "right": 2.0},
+    "objects": [{"label": "person", "dist_m": 2.0, "bearing": "left"}],
+  }
+  center = {
+    "closest_m": 1.8,
+    "sectors": {"left": 1.8, "center": 1.8, "right": 1.8},
+    "objects": [{"label": "person", "dist_m": 1.8, "bearing": "center"}],
+  }
+  assert plan_follow(left, mem, cfg).cmd == "turn_left"
+  assert plan_follow(center, mem, cfg).cmd == "forward"
+  empty = {
+    "closest_m": 2.5,
+    "sectors": {"left": 2.5, "center": 2.5, "right": 2.5},
+    "objects": [],
+  }
+  nudge = plan_follow(empty, mem, cfg)
+  assert nudge.cmd == "turn_left"
+  assert nudge.reason == "recover"
+
+
+def test_follow_turns_off_frame_even_when_something_is_close() -> None:
+  cfg = PlayConfig(follow_stop_m=1.5, lost_ticks_max=2)
+  mem = PlayMemory()
+  plan_follow(
+    {
+      "closest_m": 1.6,
+      "sectors": {"left": 1.6, "center": 1.6, "right": 1.6},
+      "objects": [{"label": "person", "dist_m": 1.6, "bearing": "left"}],
+    },
+    mem,
+    cfg,
+  )
+  nudge = plan_follow(
+    {
+      "closest_m": 1.2,
+      "sectors": {"left": 1.2, "center": 1.4, "right": 1.4},
+      "objects": [],
+    },
+    mem,
+    cfg,
+  )
+  assert nudge.reason == "recover"
+  assert nudge.cmd == "turn_left"
 
 
 def test_follow_avoids_closer_obstacle() -> None:
@@ -318,6 +379,8 @@ def test_play_found_and_giveup_phrases() -> None:
   assert "Found" in play_phrase("found", "en")
   assert "trouve" in play_phrase("found", "fr").lower()
   assert "finde" in play_phrase("giveup", "de").lower()
+  assert "personne" in play_phrase("nofollow", "fr").lower()
+  assert "anyone" in play_phrase("nofollow", "en").lower()
   assert "ten" in play_phrase("seek", "en").lower()
   assert "dix" in play_phrase("seek", "fr").lower()
   assert "zehn" in play_phrase("seek", "de").lower()
@@ -410,23 +473,89 @@ def test_seek_gives_up_when_lost_too_long() -> None:
   assert nudge.reason == "giveup"
 
 
-def test_follow_lost_glances_then_rolls() -> None:
+def test_follow_start_spins_then_nofollow() -> None:
   scene = {
     "closest_m": 2.5,
     "sectors": {"left": 2.5, "center": 2.5, "right": 2.5},
     "objects": [],
   }
   mem = PlayMemory()
-  cfg = PlayConfig(lost_ticks_max=2, search_turn_ticks=1, search_forward_ticks=1)
-  first = plan_follow(scene, mem, cfg, heading_error_deg=90)
-  assert first.cmd == "idle"
-  assert first.reason == "lost"
-  plan_follow(scene, mem, cfg, heading_error_deg=90)
-  cmds = [plan_follow(scene, mem, cfg, heading_error_deg=90).cmd for _ in range(4)]
-  assert cmds == ["turn_left", "forward", "turn_left", "forward"]
+  cfg = PlayConfig(
+    lost_ticks_max=2,
+    turn_ms_per_deg=10,
+    follow_spin_deg=90,
+    search_turn_dur_ms=300,
+  )
+  first = plan_follow(scene, mem, cfg)
+  assert first.cmd == "turn_left"
+  assert first.reason == "scan"
+  cmds = [first.cmd]
+  reasons = [first.reason]
+  while reasons[-1] != "nofollow":
+    nudge = plan_follow(scene, mem, cfg)
+    cmds.append(nudge.cmd)
+    reasons.append(nudge.reason)
+    assert len(cmds) < 10
+  assert all(cmd == "turn_left" for cmd in cmds[:-1])
+  assert cmds[-1] == "idle"
+  assert mem.spun_ms >= 90 * 10
 
 
-def test_close_furniture_still_wanders_without_unstick() -> None:
+def test_follow_lost_turns_toward_exit_side_then_full_spin() -> None:
+  cfg = PlayConfig(
+    lost_ticks_max=1,
+    turn_ms_per_deg=10,
+    follow_recover_deg=90,
+    follow_spin_deg=90,
+    search_turn_dur_ms=300,
+  )
+  mem = PlayMemory()
+  seen = {
+    "closest_m": 2.0,
+    "sectors": {"left": 2.0, "center": 2.0, "right": 2.0},
+    "objects": [{"label": "person", "dist_m": 2.0, "bearing": "right"}],
+  }
+  assert plan_follow(seen, mem, cfg).reason == "turn_to_person"
+  empty = {
+    "closest_m": 2.5,
+    "sectors": {"left": 2.5, "center": 2.5, "right": 2.5},
+    "objects": [],
+  }
+  recover = plan_follow(empty, mem, cfg)
+  assert recover.cmd == "turn_right"
+  assert recover.reason == "recover"
+  reasons = [recover.reason]
+  while reasons[-1] == "recover":
+    reasons.append(plan_follow(empty, mem, cfg).reason)
+    assert len(reasons) < 10
+  assert "scan" in reasons
+  while reasons[-1] != "nofollow":
+    reasons.append(plan_follow(empty, mem, cfg).reason)
+    assert len(reasons) < 20
+  assert reasons[-1] == "nofollow"
+
+
+def test_follow_stops_recover_when_person_reappears() -> None:
+  cfg = PlayConfig(turn_ms_per_deg=10, follow_recover_deg=180, search_turn_dur_ms=400)
+  mem = PlayMemory()
+  seen = {
+    "closest_m": 2.0,
+    "sectors": {"left": 2.0, "center": 2.0, "right": 2.0},
+    "objects": [{"label": "person", "dist_m": 2.0, "bearing": "left"}],
+  }
+  empty = {
+    "closest_m": 2.5,
+    "sectors": {"left": 2.5, "center": 2.5, "right": 2.5},
+    "objects": [],
+  }
+  assert plan_follow(seen, mem, cfg).reason == "turn_to_person"
+  assert plan_follow(empty, mem, cfg).reason == "recover"
+  back = plan_follow(seen, mem, cfg)
+  assert back.reason == "turn_to_person"
+  assert mem.search_phase == ""
+
+
+def test_close_furniture_still_spins_at_follow_start() -> None:
   scene = {
     "closest_m": 0.58,
     "sectors": {"left": 4.0, "center": 4.0, "right": 4.0},
@@ -434,11 +563,11 @@ def test_close_furniture_still_wanders_without_unstick() -> None:
     "objects": [],
   }
   nudge = plan_follow(scene, PlayMemory(), PlayConfig(lost_ticks_max=0))
-  assert nudge.reason == "close"
-  assert nudge.cmd == "idle"
+  assert nudge.reason == "scan"
+  assert nudge.cmd in ("turn_left", "turn_right")
 
 
-def test_blocked_path_keeps_searching() -> None:
+def test_blocked_path_spins_when_follow_starts_empty() -> None:
   blocked = {
     "closest_m": 0.65,
     "sectors": {"left": 0.95, "center": 0.65, "right": 0.9},
@@ -448,8 +577,8 @@ def test_blocked_path_keeps_searching() -> None:
   mem = PlayMemory()
   cfg = PlayConfig(lost_ticks_max=0)
   nudges = [plan_follow(blocked, mem, cfg) for _ in range(4)]
-  assert all(n.reason == "close" for n in nudges)
-  assert all(n.cmd == "idle" for n in nudges)
+  assert all(n.reason == "scan" for n in nudges)
+  assert all(n.cmd in ("turn_left", "turn_right") for n in nudges)
 
 
 def test_low_floor_ahead_does_not_unstick() -> None:

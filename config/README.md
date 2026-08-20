@@ -88,6 +88,9 @@ See [movement.md](../../docs/movement.md) for the full follow / hide-and-seek de
 | `follow.turn_speed` | `125` | Follow / face-voice rotation (Eye **Follow turn**) |
 | `follow.seek_turn_speed` | `125` | Hide-and-seek search rotation (Eye **Seek turn**) |
 | `follow.forward_speed` | `105` | Roll speed (Eye **Forward**) |
+| `follow.turn_ms_per_deg` | `8` | How long a follow look-around spin takes per degree |
+| `follow.follow_spin_deg` | `360` | Full rotation when follow starts with nobody in view |
+| `follow.follow_recover_deg` | `180` | Turn this far toward the side the person left the frame |
 | `follow.alive_jitter` | `0.25` | Extra wander/peek while following or seeking (`0` = metronome) |
 | `follow.min_pulse_ms` | `320` | Floor on jittered follow/seek pulses |
 | `follow.unstick_after` | `2` | Reverse after this many blocked ticks; reverse immediately if left and right are also tight |

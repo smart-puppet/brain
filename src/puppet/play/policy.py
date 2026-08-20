@@ -33,6 +33,9 @@ class PlayConfig:
   lost_ticks_max: int = 2
   found_m: float = 2.0
   seek_giveup_ticks: int = 40
+  turn_ms_per_deg: int = 8
+  follow_spin_deg: int = 360
+  follow_recover_deg: int = 180
   doa_deadband_deg: float = 25.0
   # 0 = mechanical (tests). YAML default ~0.35 = livelier wander; speeds stay as set on Eye.
   alive_jitter: float = 0.0
@@ -57,6 +60,10 @@ class PlayMemory:
   retreats: int = 0
   uturn_left: int = 0
   committed_dir: str = ""
+  had_person: bool = False
+  last_person_side: str = ""
+  search_phase: str = ""
+  spun_ms: int = 0
   rng: Any = field(default=None, repr=False, compare=False)
 
 
@@ -259,15 +266,29 @@ def plan_follow(
   center_m = _finite_m(sectors.get("center"))
 
   if person is None:
-    # Close legs often drop the person box; do not roll into them.
-    if closest_m is not None and closest_m <= cfg.follow_stop_m:
+    # Close legs often drop the box while the child is still in front.
+    # If they walked off left/right, turn that way — do not stand still.
+    exited = mem.last_person_side in ("left", "right")
+    if (
+      mem.had_person
+      and not exited
+      and closest_m is not None
+      and closest_m <= cfg.follow_stop_m
+    ):
       return DriveNudge("idle", reason="close")
     return _plan_lost(scene, mem, cfg, heading_error_deg=heading_error_deg)
 
   mem.lost_ticks = 0
   mem.wander_i = 0
+  mem.had_person = True
+  mem.search_phase = ""
+  mem.spun_ms = 0
   person_m = _finite_m(person.get("dist_m"))
   bearing = str(person.get("bearing") or "center").lower()
+  if bearing in ("left", "right"):
+    mem.last_person_side = bearing
+  elif not mem.last_person_side:
+    mem.last_person_side = "center"
   _clear_stuck(mem)
 
   if person_m is not None and person_m <= cfg.follow_stop_m:
@@ -358,6 +379,24 @@ def _wander_look_then_go(mem: PlayMemory, cfg: PlayConfig, *, reason: str) -> Dr
   )
 
 
+def _spin_target_ms(cfg: PlayConfig, deg: int) -> int:
+  return max(1, int(deg) * max(1, int(cfg.turn_ms_per_deg)))
+
+
+def _begin_follow_search(mem: PlayMemory, cfg: PlayConfig) -> None:
+  if mem.search_phase:
+    return
+  if mem.had_person and mem.last_person_side in ("left", "right"):
+    mem.search_phase = "recover"
+    mem.search_dir = "turn_left" if mem.last_person_side == "left" else "turn_right"
+  else:
+    mem.search_phase = "spin"
+    if mem.search_dir not in ("turn_left", "turn_right"):
+      mem.search_dir = "turn_left"
+  mem.spun_ms = 0
+  _clear_stuck(mem)
+
+
 def _plan_lost(
   scene: dict[str, Any],
   mem: PlayMemory,
@@ -365,16 +404,36 @@ def _plan_lost(
   *,
   heading_error_deg: Optional[float],
 ) -> DriveNudge:
-  """No YOLO person: wait a tick or two for flicker, then glance and roll.
+  """No YOLO person: spin in place until someone appears, then give up.
 
-  Do not chase last-voice DoA — it freezes after speech and spins forever.
+  Start / no last side: one full turn. Person walked off left/right: keep
+  turning that way until they are back or 180°, then the same full-turn look.
+  Do not chase last-voice DoA.
   """
-  del heading_error_deg
-  mem.lost_ticks += 1
-  if mem.lost_ticks <= max(0, cfg.lost_ticks_max):
-    return DriveNudge("idle", reason="lost")
-  _clear_stuck(mem)
-  return _wander_look_then_go(mem, cfg, reason="scan")
+  del scene, heading_error_deg
+  exited = mem.last_person_side in ("left", "right")
+  if mem.had_person and not exited:
+    mem.lost_ticks += 1
+    if mem.lost_ticks <= max(0, cfg.lost_ticks_max):
+      return DriveNudge("idle", reason="lost")
+  _begin_follow_search(mem, cfg)
+  recover_ms = _spin_target_ms(cfg, cfg.follow_recover_deg)
+  spin_ms = _spin_target_ms(cfg, cfg.follow_spin_deg)
+  if mem.search_phase == "recover" and mem.spun_ms >= recover_ms:
+    mem.search_phase = "spin"
+    mem.spun_ms = 0
+  if mem.search_phase == "spin" and mem.spun_ms >= spin_ms:
+    return DriveNudge("idle", reason="nofollow")
+  target_ms = recover_ms if mem.search_phase == "recover" else spin_ms
+  remaining = max(80, target_ms - mem.spun_ms)
+  dur = min(max(80, int(cfg.search_turn_dur_ms)), remaining)
+  mem.spun_ms += dur
+  return DriveNudge(
+    mem.search_dir,
+    speed=cfg.turn_speed,
+    dur_ms=dur,
+    reason="recover" if mem.search_phase == "recover" else "scan",
+  )
 
 
 def plan_seek(

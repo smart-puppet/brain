@@ -23,6 +23,11 @@ _PHRASES: dict[str, dict[str, str]] = {
     "fr": "Je ne te trouve pas. On arrete ?",
     "de": "Ich finde dich nicht. Wir hoeren auf.",
   },
+  "nofollow": {
+    "en": "I don't see anyone to follow.",
+    "fr": "Je ne vois personne a suivre.",
+    "de": "Ich sehe niemanden, dem ich folgen kann.",
+  },
   "closer": {
     "en": "I'm coming closer!",
     "fr": "J'arrive, je me rapproche!",
