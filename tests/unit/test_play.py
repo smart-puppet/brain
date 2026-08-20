@@ -390,15 +390,35 @@ def test_play_found_and_giveup_phrases() -> None:
   assert "accord" in play_phrase("ack", "fr").lower()
 
 
-def test_seek_found_when_person_within_two_meters() -> None:
+def test_seek_found_when_person_is_close() -> None:
   scene = {
-    "closest_m": 1.8,
-    "sectors": {"left": 2.0, "center": 1.8, "right": 2.0},
-    "objects": [{"label": "person", "dist_m": 1.9, "bearing": "center"}],
+    "closest_m": 1.4,
+    "sectors": {"left": 1.6, "center": 1.4, "right": 1.6},
+    "objects": [{"label": "person", "dist_m": 1.4, "bearing": "center"}],
   }
-  nudge = plan_seek(scene, PlayMemory(), PlayConfig(found_m=2.0))
+  nudge = plan_seek(scene, PlayMemory(), PlayConfig(follow_stop_m=1.5, found_m=2.0))
   assert nudge.reason == "found"
   assert nudge.cmd == "idle"
+
+
+def test_seek_chases_a_captured_person_like_follow() -> None:
+  mem = PlayMemory()
+  cfg = PlayConfig(follow_stop_m=1.5, found_m=2.0)
+  far = {
+    "closest_m": 2.5,
+    "sectors": {"left": 2.5, "center": 2.5, "right": 2.5},
+    "objects": [{"label": "person", "dist_m": 2.5, "bearing": "center"}],
+  }
+  assert plan_seek(far, mem, cfg).reason == "approach"
+  side = {
+    "closest_m": 1.8,
+    "sectors": {"left": 1.8, "center": 2.0, "right": 2.0},
+    "objects": [{"label": "person", "dist_m": 1.8, "bearing": "left"}],
+  }
+  nudge = plan_seek(side, mem, cfg)
+  assert nudge.reason == "turn_to_person"
+  assert nudge.cmd == "turn_left"
+  assert nudge.reason != "found"
 
 
 def test_seek_station_look_then_faces_and_rolls() -> None:
@@ -469,9 +489,10 @@ def test_seek_second_station_keeps_going_straight() -> None:
   assert all(cmd == "forward" for cmd in cmds[6:])
 
 
-def test_seek_recovers_toward_exit_then_scans() -> None:
+def test_seek_lost_person_uses_follow_look_then_resumes() -> None:
   cfg = PlayConfig(
     found_m=1.5,
+    follow_stop_m=1.5,
     turn_ms_per_deg=10,
     follow_recover_deg=90,
     follow_spin_deg=90,
@@ -499,7 +520,54 @@ def test_seek_recovers_toward_exit_then_scans() -> None:
   while reasons[-1] == "recover":
     reasons.append(plan_seek(empty, mem, cfg).reason)
     assert len(reasons) < 10
+  assert "scan" in reasons
+  while reasons[-1] == "scan":
+    reasons.append(plan_seek(empty, mem, cfg).reason)
+    assert len(reasons) < 20
   assert reasons[-1] == "search"
+  assert plan_seek(empty, mem, cfg).cmd == "forward"
+
+
+def test_seek_dead_end_reverses_and_uturns() -> None:
+  open_scene = {
+    "closest_m": 2.5,
+    "sectors": {"left": 2.5, "center": 2.5, "right": 2.5},
+    "objects": [],
+  }
+  dead = {
+    "closest_m": 0.5,
+    "sectors": {"left": 0.55, "center": 0.5, "right": 0.5},
+    "floor_ahead_pct": 0.04,
+    "objects": [],
+  }
+  mem = PlayMemory()
+  cfg = PlayConfig(
+    turn_ms_per_deg=10,
+    follow_spin_deg=90,
+    seek_face_deg=0,
+    search_turn_dur_ms=300,
+    search_forward_dur_ms=400,
+    seek_giveup_ticks=80,
+    seek_map=False,
+  )
+  rolled = False
+  for _ in range(12):
+    nudge = plan_seek(open_scene, mem, cfg)
+    if nudge.cmd == "forward":
+      rolled = True
+      break
+  assert rolled
+  abort = plan_seek(dead, mem, cfg)
+  assert abort.cmd == "backward"
+  turns = []
+  for _ in range(12):
+    nudge = plan_seek(dead, mem, cfg)
+    if nudge.cmd not in ("turn_left", "turn_right"):
+      break
+    turns.append(nudge.dur_ms)
+  assert sum(turns) >= 1500
+  open_again = plan_seek(open_scene, mem, cfg)
+  assert open_again.cmd == "forward"
 
 
 def test_seek_turns_instead_of_rolling_into_furniture() -> None:

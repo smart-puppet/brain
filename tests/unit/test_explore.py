@@ -54,6 +54,16 @@ def test_free_corridor_frontier_is_ahead() -> None:
   assert abs(bearing) < 45.0
 
 
+def test_dead_ahead_is_not_a_frontier_goal() -> None:
+  world = OccupancyMap(res_m=0.1, size_m=8.0)
+  for i in range(1, 25):
+    world._stamp_cell(i * 0.1, 0.0, FREE)
+  world.mark_dead_ahead(range_m=1.5, half_deg=40.0)
+  bearing = world.frontier_bearing_deg()
+  if bearing is not None:
+    assert abs(bearing) < 50.0
+
+
 def test_near_wall_frontier_loses_to_open_far_cell() -> None:
   world = OccupancyMap(res_m=0.1, size_m=8.0)
   for i in range(1, 25):
@@ -67,17 +77,37 @@ def test_near_wall_frontier_loses_to_open_far_cell() -> None:
 
 
 def test_seek_backs_out_of_a_corner() -> None:
-  scene = {
+  open_scene = {
+    "closest_m": 2.5,
+    "sectors": {"left": 2.5, "center": 2.5, "right": 2.5},
+    "floor_ahead_pct": 0.4,
+    "objects": [],
+  }
+  corner = {
     "closest_m": 0.65,
     "sectors": {"left": 0.7, "center": 0.65, "right": 0.7},
     "floor_ahead_pct": 0.05,
     "objects": [],
   }
   mem = PlayMemory()
-  cfg = PlayConfig(seek_map=True, seek_giveup_ticks=40, seek_giveup_s=0)
-  first = plan_seek(scene, mem, cfg)
+  cfg = PlayConfig(
+    seek_map=True,
+    seek_giveup_ticks=40,
+    seek_giveup_s=0,
+    turn_ms_per_deg=10,
+    follow_spin_deg=90,
+    seek_face_deg=0,
+    search_turn_dur_ms=300,
+  )
+  for _ in range(12):
+    nudge = plan_seek(open_scene, mem, cfg)
+    if nudge.cmd == "forward":
+      break
+  else:
+    raise AssertionError("never started rolling")
+  first = plan_seek(corner, mem, cfg)
   assert first.cmd == "backward"
-  second = plan_seek(scene, mem, cfg)
+  second = plan_seek(corner, mem, cfg)
   assert second.cmd in ("turn_left", "turn_right")
 
 

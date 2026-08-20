@@ -75,6 +75,7 @@ class PlayMemory:
   last_roll_dir: str = ""
   face_target_ms: int = 0
   had_scan: bool = False
+  chasing: bool = False
   explore: Any = field(default=None, repr=False)
   rng: Any = field(default=None, repr=False, compare=False)
 
@@ -484,6 +485,33 @@ def _seek_boxed_in(
   return False
 
 
+def _seek_dead_end(
+  sectors: dict[str, Any],
+  *,
+  boxed: bool,
+) -> bool:
+  """True when closed ahead and neither side is an opening worth checking."""
+  if not boxed:
+    return False
+  open_m = 1.1
+  left = _finite_m(sectors.get("left"))
+  right = _finite_m(sectors.get("right"))
+  left_open = left is None or left >= open_m
+  right_open = right is None or right >= open_m
+  return not left_open and not right_open
+
+
+def _end_seek_chase(mem: PlayMemory) -> None:
+  mem.chasing = False
+  mem.had_person = False
+  mem.last_person_side = ""
+  mem.search_phase = "roll"
+  mem.had_scan = True
+  mem.spun_ms = 0
+  mem.wander_i = 0
+  mem.face_target_ms = 0
+
+
 def _seek_spin_nudge(mem: PlayMemory, cfg: PlayConfig, *, target_ms: int, reason: str) -> DriveNudge:
   remaining = max(80, target_ms - mem.spun_ms)
   dur = min(max(80, int(cfg.search_turn_dur_ms)), remaining)
@@ -505,23 +533,37 @@ def plan_seek(
 ) -> DriveNudge:
   """Look around the room until a person is seen, then follow until close (found).
 
-  Lost: recover toward the last exit side, then one 360° look, face the next
-  heading, and cruise straight until boxed in. Escape with reverse plus a ~90°
-  turn, then cruise again. Do not chase last-voice DoA. Give up after
-  ``seek_giveup_s`` or ``seek_giveup_ticks``.
+  Lost: one 360° look, face the next heading, and cruise straight until boxed
+  in. A closed-ahead corner is a dead end — mark it and leave (U-turn if both
+  sides are tight). If YOLO captures a person, chase with the same recover /
+  approach as follow until ``follow_stop_m``. Do not chase last-voice DoA.
+  Give up after ``seek_giveup_s`` or ``seek_giveup_ticks``.
   """
+  if cfg.seek_map:
+    _seek_map(mem, cfg).integrate(scene)
+  if _seek_should_giveup(mem, cfg):
+    return DriveNudge("idle", reason="giveup")
+
   person = nearest_person(scene)
   if person is not None:
-    person_m = _finite_m(person.get("dist_m"))
-    if person_m is not None and person_m <= cfg.found_m:
+    mem.chasing = True
+    nudge = plan_follow(scene, mem, cfg, heading_error_deg=heading_error_deg)
+    if nudge.reason == "close":
       mem.lost_ticks = 0
       mem.wander_i = 0
       mem.search_phase = ""
       mem.spun_ms = 0
+      mem.chasing = False
       return DriveNudge("idle", reason="found", person=person)
-    return _commit_seek(
-      mem, cfg, plan_follow(scene, mem, cfg, heading_error_deg=heading_error_deg)
-    )
+    return _commit_seek(mem, cfg, nudge)
+
+  if mem.chasing or (mem.had_person and mem.last_person_side in ("left", "right")):
+    mem.chasing = True
+    lost = _plan_lost(scene, mem, cfg, heading_error_deg=heading_error_deg)
+    if lost.reason == "nofollow":
+      _end_seek_chase(mem)
+    else:
+      return _commit_seek(mem, cfg, lost)
   return _plan_seek_lost(scene, mem, cfg)
 
 
@@ -531,8 +573,6 @@ def _plan_seek_lost(
   cfg: PlayConfig,
 ) -> DriveNudge:
   mem.lost_ticks += 1
-  if cfg.seek_map:
-    _seek_map(mem, cfg).integrate(scene)
   if _seek_should_giveup(mem, cfg):
     return DriveNudge("idle", reason="giveup")
   exited = mem.last_person_side in ("left", "right")
@@ -554,12 +594,17 @@ def _plan_seek_lost(
   boxed = _seek_boxed_in(
     closest_m=closest_m, floor_ahead_pct=floor_ahead_pct, blocked=blocked
   )
-  if boxed and mem.search_phase in ("", "scan", "face", "roll"):
+  dead_end = _seek_dead_end(sectors, boxed=boxed)
+  # Only abort a cruise into a closed corner — finish the opening look first.
+  if boxed and mem.search_phase == "roll":
     mem.search_phase = "escape"
     mem.wander_i = 0
     mem.spun_ms = 0
   if mem.search_phase == "escape":
     if mem.wander_i == 0:
+      if cfg.seek_map and mem.explore is not None:
+        mem.explore.mark_dead_ahead()
+        mem.explore.mark_station()
       mem.wander_i = 1
       return _commit_seek(
         mem,
@@ -571,15 +616,18 @@ def _plan_seek_lost(
           reason="search",
         ),
       )
-    mem.search_dir = _freer_turn(sectors, mem, jitter=cfg.alive_jitter)
-    mem.last_roll_dir = mem.search_dir
-    mem.search_phase = "roll"
-    mem.had_scan = True
-    mem.spun_ms = 0
-    mem.wander_i = 0
-    return _commit_seek(
-      mem, cfg, _seek_spin_nudge(mem, cfg, target_ms=_spin_target_ms(cfg, 90), reason="search")
-    )
+    if not boxed:
+      mem.search_phase = "roll"
+      mem.wander_i = 0
+      mem.spun_ms = 0
+    else:
+      mem.search_dir = _freer_turn(sectors, mem, jitter=cfg.alive_jitter)
+      mem.last_roll_dir = mem.search_dir
+      mem.face_target_ms = _spin_target_ms(cfg, 180 if dead_end else 90)
+      mem.search_phase = "face"
+      mem.had_scan = True
+      mem.spun_ms = 0
+      mem.wander_i = 0
 
   _begin_seek_search(mem)
   recover_ms = _spin_target_ms(cfg, cfg.follow_recover_deg)
@@ -611,8 +659,11 @@ def _plan_seek_lost(
   if mem.search_phase == "roll":
     if boxed:
       mem.search_phase = "escape"
-      mem.wander_i = 0
+      mem.wander_i = 1
       mem.spun_ms = 0
+      if cfg.seek_map and mem.explore is not None:
+        mem.explore.mark_dead_ahead()
+        mem.explore.mark_station()
       return _commit_seek(
         mem,
         cfg,

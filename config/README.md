@@ -81,7 +81,7 @@ See [movement.md](../../docs/movement.md) for the full follow / hide-and-seek de
 |-----|---------|---------|
 | `enabled` | `true` | Background play supervisor |
 | `allow_motion` | `true` | Publish drive nudges (`false` = voice only) |
-| `follow.stop_m` | `0.9` | Stop this far from the child |
+| `follow.stop_m` | `0.9` | Stop this far from the child (seek uses this as “found you”) |
 | `follow.obstacle_m` | `0.8` | Sidestep if something else is closer |
 | `follow.forward_dur_ms` | `700` | One roll pulse |
 | `follow.backward_dur_ms` | `500` | One reverse pulse |

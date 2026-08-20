@@ -69,7 +69,7 @@ play:
     follow_spin_deg: 360      # look-around at follow start / first seek look
     follow_recover_deg: 180   # turn toward the side the person left the frame
     seek_face_deg: 90         # only used if the next hide is well off-heading
-    found_m: 2.0              # hide-and-seek: person within this range counts as found
+    found_m: 2.0              # unused for found; seek now stops at stop_m like follow
     seek_giveup_ticks: 240    # hard cap on lost captures
     seek_giveup_s: 180        # give up after this many seconds of searching
     seek_map: true            # stamp a local occupancy map (frontiers used for the first heading)

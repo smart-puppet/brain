@@ -167,6 +167,24 @@ class OccupancyMap:
       disk[sr0 - r0 : sr1 - r0, sc0 - c0 : sc1 - c0].astype(np.uint8),
     )
 
+  def mark_dead_ahead(self, range_m: float = 1.8, half_deg: float = 55.0) -> None:
+    """Closed-ahead corners are dead ends — do not keep picking them as goals."""
+    steps = max(1, int(round(range_m / self.res_m)))
+    yaw = math.radians(self.yaw_deg)
+    for i in range(1, steps + 1):
+      r = i * self.res_m
+      for deg in range(-int(half_deg), int(half_deg) + 1, 5):
+        bearing = yaw + math.radians(deg)
+        wx = self.x + r * math.cos(bearing)
+        wy = self.y + r * math.sin(bearing)
+        idx = self._world_to_idx(wx, wy)
+        if idx is None:
+          continue
+        row, col = idx
+        self.seen[row, col] = 1
+        if r >= 0.45 and self.grid[row, col] == UNKNOWN:
+          self.grid[row, col] = OCCUPIED if r >= 0.9 else FREE
+
   def frontier_count(self) -> int:
     return int(np.count_nonzero(self._frontier_mask()))
 
@@ -262,6 +280,9 @@ class OccupancyMap:
       + np.roll(occ, -1, 1)
     )
     mask &= occ_n < 2
+    open_mask = mask & (occ_n == 0)
+    if open_mask.any():
+      mask = open_mask
     if self.seen.any():
       far = mask & (self.seen == 0)
       if far.any():
