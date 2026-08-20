@@ -314,7 +314,7 @@ class Orchestrator:
           scene=play_scene,
           drive=self._drive,
           config=PlayConfig(
-            follow_stop_m=float(follow.get("stop_m", 0.9)),
+            follow_stop_m=float(follow.get("stop_m", 1.5)),
             obstacle_m=float(follow.get("obstacle_m", 0.8)),
             sector_block_m=float(follow.get("sector_block_m", 0.7)),
             forward_speed=speeds["forward"],
@@ -329,7 +329,7 @@ class Orchestrator:
             search_forward_ticks=int(follow.get("search_forward_ticks", 1)),
             search_forward_dur_ms=int(follow.get("search_forward_dur_ms", 1100)),
             lost_ticks_max=int(follow.get("lost_ticks", 2)),
-            found_m=float(follow.get("found_m", 1.15)),
+            found_m=float(follow.get("found_m", 2.0)),
             seek_giveup_ticks=int(follow.get("seek_giveup_ticks", 24)),
             alive_jitter=float(follow.get("alive_jitter", 0.25)),
             floor_block_pct=float(follow.get("floor_block_pct", 0.12)),
@@ -345,7 +345,9 @@ class Orchestrator:
           status_topic=str(mqtt_cfg.get("play_status_topic", "robot/play/status")),
           speeds_topic=str(mqtt_cfg.get("play_speeds_topic", "robot/play/speeds")),
           busy_fn=lambda: (
-            self._reply_in_progress or self.state != PipelineState.LISTENING
+            self._reply_in_progress
+            or self.state != PipelineState.LISTENING
+            or self._user_speaking_now()
           ),
           heading_fn=self._play_heading_error,
           announce_fn=self._announce_play_event,

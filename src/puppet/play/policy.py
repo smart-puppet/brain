@@ -14,7 +14,7 @@ from typing import Any, Optional
 
 @dataclass
 class PlayConfig:
-  follow_stop_m: float = 0.9
+  follow_stop_m: float = 1.5
   obstacle_m: float = 0.8
   sector_block_m: float = 0.7
   person_margin_m: float = 0.2
@@ -31,7 +31,7 @@ class PlayConfig:
   search_forward_ticks: int = 1
   search_forward_dur_ms: int = 900
   lost_ticks_max: int = 2
-  found_m: float = 1.15
+  found_m: float = 2.0
   seek_giveup_ticks: int = 40
   doa_deadband_deg: float = 25.0
   # 0 = mechanical (tests). YAML default ~0.35 = livelier wander; speeds stay as set on Eye.
@@ -259,28 +259,15 @@ def plan_follow(
   center_m = _finite_m(sectors.get("center"))
 
   if person is None:
+    # Close legs often drop the person box; do not roll into them.
+    if closest_m is not None and closest_m <= cfg.follow_stop_m:
+      return DriveNudge("idle", reason="close")
     return _plan_lost(scene, mem, cfg, heading_error_deg=heading_error_deg)
 
   mem.lost_ticks = 0
   mem.wander_i = 0
   person_m = _finite_m(person.get("dist_m"))
   bearing = str(person.get("bearing") or "center").lower()
-  floor_pct = _floor_pct(scene)
-  blocked = _blocked_ahead_of_person(
-    person_m=person_m,
-    closest_m=closest_m,
-    center_m=center_m,
-    cfg=cfg,
-    floor_ahead_pct=floor_pct,
-  )
-  if _still_trapped(
-    mem,
-    cfg,
-    blocked=blocked,
-    closest_m=closest_m,
-    floor_ahead_pct=floor_pct,
-  ):
-    return _unstick(mem, cfg, sectors, person=person, closest_m=closest_m, turn_reason="avoid")
   _clear_stuck(mem)
 
   if person_m is not None and person_m <= cfg.follow_stop_m:
@@ -386,29 +373,7 @@ def _plan_lost(
   mem.lost_ticks += 1
   if mem.lost_ticks <= max(0, cfg.lost_ticks_max):
     return DriveNudge("idle", reason="lost")
-  sectors = scene.get("sectors") if isinstance(scene.get("sectors"), dict) else {}
-  closest_m = _finite_m(scene.get("closest_m"))
-  center_m = _finite_m(sectors.get("center"))
-  floor_pct = _floor_pct(scene)
-  blocked = _blocked_ahead_of_person(
-    person_m=None,
-    closest_m=closest_m,
-    center_m=center_m,
-    cfg=cfg,
-    floor_ahead_pct=floor_pct,
-  )
-  if _still_trapped(
-    mem,
-    cfg,
-    blocked=blocked,
-    closest_m=closest_m,
-    floor_ahead_pct=floor_pct,
-  ):
-    return _unstick(mem, cfg, sectors, closest_m=closest_m, turn_reason="scan")
-  leaving_corner = mem.retreats > 0 or mem.last_stuck == "uturn"
   _clear_stuck(mem)
-  if leaving_corner:
-    return _roll_after_escape(mem, cfg, reason="scan")
   return _wander_look_then_go(mem, cfg, reason="scan")
 
 
@@ -444,31 +409,7 @@ def _plan_seek_lost(
   mem.lost_ticks += 1
   if mem.lost_ticks >= max(1, cfg.seek_giveup_ticks):
     return DriveNudge("idle", reason="giveup")
-  sectors = scene.get("sectors") if isinstance(scene.get("sectors"), dict) else {}
-  closest_m = _finite_m(scene.get("closest_m"))
-  center_m = _finite_m(sectors.get("center"))
-  floor_pct = _floor_pct(scene)
-  blocked = _blocked_ahead_of_person(
-    person_m=None,
-    closest_m=closest_m,
-    center_m=center_m,
-    cfg=cfg,
-    floor_ahead_pct=floor_pct,
-  )
-  if _still_trapped(
-    mem,
-    cfg,
-    blocked=blocked,
-    closest_m=closest_m,
-    floor_ahead_pct=floor_pct,
-  ):
-    mem.cycle_turn_n = 0
-    mem.cycle_fwd_n = 0
-    return _unstick(mem, cfg, sectors, closest_m=closest_m, turn_reason="search")
-  leaving_corner = mem.retreats > 0 or mem.last_stuck == "uturn"
   _clear_stuck(mem)
-  if leaving_corner:
-    return _roll_after_escape(mem, cfg, reason="search")
   return _wander_look_then_go(mem, cfg, reason="search")
 
 

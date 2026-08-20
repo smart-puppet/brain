@@ -105,13 +105,18 @@ class PlaySupervisor:
     mode = (mode or "idle").strip().lower()
     if mode not in ("idle", "follow", "seek"):
       mode = "idle"
+    busy = self._is_busy()
     with self._lock:
       previous = self._mode
       same = mode == previous
       self._mode = mode
       if not same:
         self._mem = PlayMemory()
-      self._status = {"mode": mode, "reason": "start" if mode != "idle" else "idle"}
+      self._status = {
+        "mode": mode,
+        "reason": "start" if mode != "idle" else "idle",
+        "busy": busy,
+      }
       if announce and not same and mode == "seek":
         self._pending_announce = "seek"
     if mode == "idle":
@@ -225,6 +230,9 @@ class PlaySupervisor:
     except Exception:
       pass
 
+  def _is_busy(self) -> bool:
+    return self._busy_fn is not None and bool(self._busy_fn())
+
   def _idle(self, *, force: bool = False) -> None:
     if not force and self._last_cmd == "idle":
       return
@@ -253,14 +261,23 @@ class PlaySupervisor:
       logger.warning("Play nudge failed: %s", result.get("error"))
 
   def _run(self) -> None:
+    last_busy: Optional[bool] = None
     while not self._stop.wait(self._tick_s):
       with self._lock:
         mode = self._mode
         pending = self._pending_announce
-      if mode == "idle" and not pending:
-        continue
-      if self._busy_fn is not None and self._busy_fn():
-        # Skip ticks but do not publish idle — that cancelled DoA face-speaker turns.
+      busy = self._is_busy()
+      if mode in ("follow", "seek") and busy != last_busy:
+        last_busy = busy
+        with self._lock:
+          self._status = {**self._status, "mode": mode, "busy": busy}
+        self._publish_status()
+      if mode == "idle":
+        last_busy = None
+        if not pending:
+          continue
+      if busy:
+        # Skip motion ticks; status.busy pauses the DeepStream camera pipeline.
         continue
       kind = self.take_pending_announce()
       if kind:
@@ -309,6 +326,7 @@ class PlaySupervisor:
         "person_m": person.get("dist_m"),
         "person_side": person.get("bearing"),
         "closest_m": result.get("closest_m"),
+        "busy": False,
         "ts": time.time(),
       }
       with self._lock:
