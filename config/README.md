@@ -91,6 +91,12 @@ See [movement.md](../../docs/movement.md) for the full follow / hide-and-seek de
 | `follow.turn_ms_per_deg` | `8` | How long a follow look-around spin takes per degree |
 | `follow.follow_spin_deg` | `360` | Full rotation when follow starts with nobody in view |
 | `follow.follow_recover_deg` | `180` | Turn this far toward the side the person left the frame |
+| `follow.search_forward_ticks` | `12` | Kept for compatibility; seek now cruises until blocked |
+| `follow.search_forward_dur_ms` | `1500` | Length of one seek cruise pulse |
+| `follow.seek_giveup_s` | `180` | Hide-and-seek give-up timeout (seconds) |
+| `follow.seek_giveup_ticks` | `240` | Hard cap on lost captures while seeking |
+| `follow.seek_map` | `true` | Build a local occupancy map; first heading uses an unexplored frontier |
+| `follow.forward_m_per_s` | `0.30` | Dead-reckon seek pose (meters per second at forward_speed) |
 | `follow.alive_jitter` | `0.25` | Extra wander/peek while following or seeking (`0` = metronome) |
 | `follow.min_pulse_ms` | `320` | Floor on jittered follow/seek pulses |
 | `follow.unstick_after` | `2` | Reverse after this many blocked ticks; reverse immediately if left and right are also tight |

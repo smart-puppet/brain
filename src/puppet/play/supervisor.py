@@ -329,6 +329,8 @@ class PlaySupervisor:
         "busy": False,
         "ts": time.time(),
       }
+      if mode_now == "seek" and getattr(mem, "explore", None) is not None:
+        status["explore"] = mem.explore.snapshot()
       with self._lock:
         self._status = status
       logger.info(
@@ -341,6 +343,16 @@ class PlaySupervisor:
         result.get("closest_m"),
         result.get("floor_ahead_pct"),
       )
+      if mode_now == "seek" and status.get("explore"):
+        exp = status["explore"]
+        logger.info(
+          "Play explore frontiers=%s known=%s pose=%.2f,%.2f yaw=%.0f",
+          exp.get("frontiers"),
+          exp.get("known"),
+          exp.get("x") or 0.0,
+          exp.get("y") or 0.0,
+          exp.get("yaw") or 0.0,
+        )
       self._apply(nudge)
       self._publish_status()
       if nudge.reason in ("found", "giveup", "nofollow"):

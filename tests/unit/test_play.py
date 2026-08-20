@@ -342,7 +342,7 @@ def test_stuck_signal_is_ignored() -> None:
   }
   nudge = plan_seek(scene, PlayMemory(), PlayConfig())
   assert nudge.reason != "unstick"
-  assert nudge.cmd in ("turn_left", "turn_right", "forward")
+  assert nudge.cmd in ("turn_left", "turn_right", "forward", "backward")
 
 
 def test_follow_and_seek_use_separate_turn_speeds() -> None:
@@ -361,7 +361,7 @@ def test_follow_and_seek_use_separate_turn_speeds() -> None:
   seek = plan_seek(seek_scene, PlayMemory(), cfg)
   assert follow.speed == 180
   assert seek.speed == 70
-  assert seek.reason == "search"
+  assert seek.reason == "scan"
 
 
 def test_follow_approaches_when_clear() -> None:
@@ -401,7 +401,7 @@ def test_seek_found_when_person_within_two_meters() -> None:
   assert nudge.cmd == "idle"
 
 
-def test_seek_alternates_glance_and_roll() -> None:
+def test_seek_station_look_then_faces_and_rolls() -> None:
   scene = {
     "closest_m": 2.0,
     "sectors": {"left": 2.0, "center": 2.0, "right": 2.0},
@@ -409,18 +409,45 @@ def test_seek_alternates_glance_and_roll() -> None:
   }
   mem = PlayMemory()
   cfg = PlayConfig(
-    search_turn_ticks=1,
-    search_forward_ticks=1,
-    search_turn_dur_ms=500,
+    turn_ms_per_deg=10,
+    follow_spin_deg=90,
+    seek_face_deg=90,
+    search_turn_dur_ms=300,
     search_forward_dur_ms=900,
+    search_forward_ticks=1,
+    seek_giveup_ticks=40,
+    seek_map=False,
   )
-  nudges = [plan_seek(scene, mem, cfg) for _ in range(4)]
-  assert [n.cmd for n in nudges] == ["turn_left", "forward", "turn_left", "forward"]
-  assert nudges[0].dur_ms == 500
-  assert nudges[1].dur_ms == 900
+  nudges = [plan_seek(scene, mem, cfg) for _ in range(7)]
+  assert [n.reason for n in nudges] == ["scan", "scan", "scan", "search", "search", "search", "search"]
+  assert [n.cmd for n in nudges[:6]] == ["turn_left"] * 6
+  assert nudges[6].cmd == "forward"
+  assert nudges[6].dur_ms == 900
 
 
-def test_seek_searches_when_no_person() -> None:
+def test_seek_keeps_rolling_after_first_look() -> None:
+  scene = {
+    "closest_m": 2.5,
+    "sectors": {"left": 2.5, "center": 2.5, "right": 2.5},
+    "objects": [],
+  }
+  mem = PlayMemory()
+  cfg = PlayConfig(
+    turn_ms_per_deg=10,
+    follow_spin_deg=90,
+    seek_face_deg=0,
+    search_turn_dur_ms=300,
+    search_forward_dur_ms=800,
+    search_forward_ticks=8,
+    seek_giveup_ticks=40,
+    seek_map=False,
+  )
+  nudges = [plan_seek(scene, mem, cfg) for _ in range(11)]
+  assert all(n.reason == "scan" for n in nudges[:3])
+  assert all(n.cmd == "forward" for n in nudges[3:])
+
+
+def test_seek_second_station_keeps_going_straight() -> None:
   scene = {
     "closest_m": 2.0,
     "sectors": {"left": 2.0, "center": 2.0, "right": 2.0},
@@ -428,16 +455,84 @@ def test_seek_searches_when_no_person() -> None:
   }
   mem = PlayMemory()
   cfg = PlayConfig(
-    search_turn_ticks=3,
-    search_forward_ticks=3,
-    search_turn_dur_ms=1800,
-    search_forward_dur_ms=1200,
+    turn_ms_per_deg=10,
+    follow_spin_deg=90,
+    seek_face_deg=90,
+    search_turn_dur_ms=300,
+    search_forward_dur_ms=400,
+    search_forward_ticks=1,
+    seek_giveup_ticks=40,
+    seek_map=False,
   )
-  nudges = [plan_seek(scene, mem, cfg) for _ in range(6)]
-  assert [n.cmd for n in nudges[:3]] == ["turn_left", "turn_left", "turn_left"]
-  assert all(n.dur_ms == 1800 for n in nudges[:3])
-  assert [n.cmd for n in nudges[3:]] == ["forward", "forward", "forward"]
-  assert all(n.dur_ms == 1200 for n in nudges[3:])
+  cmds = [plan_seek(scene, mem, cfg).cmd for _ in range(10)]
+  assert cmds[6] == "forward"
+  assert all(cmd == "forward" for cmd in cmds[6:])
+
+
+def test_seek_recovers_toward_exit_then_scans() -> None:
+  cfg = PlayConfig(
+    found_m=1.5,
+    turn_ms_per_deg=10,
+    follow_recover_deg=90,
+    follow_spin_deg=90,
+    seek_face_deg=90,
+    search_turn_dur_ms=300,
+    seek_giveup_ticks=40,
+    seek_map=False,
+  )
+  mem = PlayMemory()
+  seen = {
+    "closest_m": 2.5,
+    "sectors": {"left": 2.5, "center": 2.5, "right": 2.5},
+    "objects": [{"label": "person", "dist_m": 2.5, "bearing": "right"}],
+  }
+  empty = {
+    "closest_m": 2.5,
+    "sectors": {"left": 2.5, "center": 2.5, "right": 2.5},
+    "objects": [],
+  }
+  assert plan_seek(seen, mem, cfg).reason == "turn_to_person"
+  recover = plan_seek(empty, mem, cfg)
+  assert recover.cmd == "turn_right"
+  assert recover.reason == "recover"
+  reasons = [recover.reason]
+  while reasons[-1] == "recover":
+    reasons.append(plan_seek(empty, mem, cfg).reason)
+    assert len(reasons) < 10
+  assert reasons[-1] == "search"
+
+
+def test_seek_turns_instead_of_rolling_into_furniture() -> None:
+  open_scene = {
+    "closest_m": 2.0,
+    "sectors": {"left": 2.0, "center": 2.0, "right": 2.0},
+    "objects": [],
+  }
+  blocked = {
+    "closest_m": 0.4,
+    "sectors": {"left": 1.5, "center": 0.4, "right": 0.6},
+    "objects": [],
+  }
+  mem = PlayMemory()
+  cfg = PlayConfig(
+    turn_ms_per_deg=10,
+    follow_spin_deg=90,
+    seek_face_deg=90,
+    search_turn_dur_ms=300,
+    search_forward_dur_ms=400,
+    search_forward_ticks=2,
+    seek_giveup_ticks=40,
+    seek_map=False,
+  )
+  nudge = None
+  for _ in range(12):
+    nudge = plan_seek(open_scene, mem, cfg)
+    if nudge.cmd == "forward":
+      break
+  assert nudge is not None and nudge.cmd == "forward"
+  abort = plan_seek(blocked, mem, cfg)
+  assert abort.cmd == "backward"
+  assert abort.reason != "unstick"
 
 
 def test_seek_turns_when_path_blocked() -> None:
@@ -448,7 +543,7 @@ def test_seek_turns_when_path_blocked() -> None:
   }
   nudge = plan_seek(scene, PlayMemory(), PlayConfig())
   assert nudge.reason != "unstick"
-  assert nudge.cmd in ("turn_left", "turn_right", "forward")
+  assert nudge.cmd in ("turn_left", "turn_right", "forward", "backward")
 
 
 def test_seek_does_not_chase_voice() -> None:
@@ -590,7 +685,7 @@ def test_low_floor_ahead_does_not_unstick() -> None:
   }
   nudge = plan_seek(scene, PlayMemory(), PlayConfig(floor_block_pct=0.12))
   assert nudge.reason != "unstick"
-  assert nudge.cmd in ("turn_left", "turn_right", "forward")
+  assert nudge.cmd in ("turn_left", "turn_right", "forward", "backward")
 
 
 def test_alive_jitter_still_searches() -> None:
@@ -600,7 +695,12 @@ def test_alive_jitter_still_searches() -> None:
     "objects": [],
   }
   mem = PlayMemory(rng=random.Random(7))
-  cfg = PlayConfig(alive_jitter=0.4, search_turn_ticks=3, search_forward_ticks=3)
+  cfg = PlayConfig(
+    alive_jitter=0.4,
+    search_turn_ticks=3,
+    search_forward_ticks=3,
+    seek_map=False,
+  )
   cmds = [plan_seek(scene, mem, cfg).cmd for _ in range(14)]
   assert set(cmds) <= {"turn_left", "turn_right", "forward"}
   assert "forward" in cmds

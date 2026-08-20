@@ -11,6 +11,8 @@ import random
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from puppet.play.explore import OccupancyMap
+
 
 @dataclass
 class PlayConfig:
@@ -28,14 +30,20 @@ class PlayConfig:
   turn_dur_ms: int = 280
   search_turn_dur_ms: int = 500
   search_turn_ticks: int = 1
-  search_forward_ticks: int = 1
-  search_forward_dur_ms: int = 900
+  search_forward_ticks: int = 12
+  search_forward_dur_ms: int = 1500
   lost_ticks_max: int = 2
   found_m: float = 2.0
-  seek_giveup_ticks: int = 40
+  seek_giveup_ticks: int = 240
+  seek_giveup_s: float = 180.0
+  seek_map: bool = True
+  forward_m_per_s: float = 0.30
+  map_res_m: float = 0.1
+  map_size_m: float = 12.0
   turn_ms_per_deg: int = 8
   follow_spin_deg: int = 360
   follow_recover_deg: int = 180
+  seek_face_deg: int = 90
   doa_deadband_deg: float = 25.0
   # 0 = mechanical (tests). YAML default ~0.35 = livelier wander; speeds stay as set on Eye.
   alive_jitter: float = 0.0
@@ -64,6 +72,10 @@ class PlayMemory:
   last_person_side: str = ""
   search_phase: str = ""
   spun_ms: int = 0
+  last_roll_dir: str = ""
+  face_target_ms: int = 0
+  had_scan: bool = False
+  explore: Any = field(default=None, repr=False)
   rng: Any = field(default=None, repr=False, compare=False)
 
 
@@ -330,55 +342,6 @@ def plan_follow(
   )
 
 
-def _search_turn(mem: PlayMemory, cfg: PlayConfig, *, reason: str) -> DriveNudge:
-  speed = cfg.seek_turn_speed if reason == "search" else cfg.turn_speed
-  return DriveNudge(
-    mem.search_dir,
-    speed=speed,
-    dur_ms=_dur(cfg, cfg.search_turn_dur_ms, mem),
-    reason=reason,
-  )
-
-
-def _ensure_seek_cycle(mem: PlayMemory, cfg: PlayConfig) -> tuple[int, int]:
-  if cfg.alive_jitter <= 0:
-    return max(1, cfg.search_turn_ticks), max(1, cfg.search_forward_ticks)
-  if mem.cycle_turn_n > 0 and mem.cycle_fwd_n > 0:
-    return mem.cycle_turn_n, mem.cycle_fwd_n
-  rng = _rng(mem)
-  turn_span = max(0, int(round(cfg.search_turn_ticks * cfg.alive_jitter)))
-  fwd_span = max(0, int(round(cfg.search_forward_ticks * cfg.alive_jitter)))
-  mem.cycle_turn_n = max(1, cfg.search_turn_ticks + (rng.randint(-turn_span, turn_span) if turn_span else 0))
-  mem.cycle_fwd_n = max(1, cfg.search_forward_ticks + (rng.randint(-fwd_span, fwd_span) if fwd_span else 0))
-  return mem.cycle_turn_n, mem.cycle_fwd_n
-
-
-def _roll_after_escape(mem: PlayMemory, cfg: PlayConfig, *, reason: str) -> DriveNudge:
-  """After a U-turn the new heading is already in view — roll, don't glance again."""
-  return DriveNudge(
-    "forward",
-    speed=cfg.forward_speed,
-    dur_ms=_dur(cfg, cfg.search_forward_dur_ms, mem),
-    reason=reason,
-  )
-
-
-def _wander_look_then_go(mem: PlayMemory, cfg: PlayConfig, *, reason: str) -> DriveNudge:
-  """Glance one way, then roll. Keep that heading — do not wig-wag left/right."""
-  turn_n, fwd_n = _ensure_seek_cycle(mem, cfg)
-  cycle = turn_n + fwd_n
-  phase = mem.wander_i % cycle
-  mem.wander_i += 1
-  if phase < turn_n:
-    return _search_turn(mem, cfg, reason=reason)
-  return DriveNudge(
-    "forward",
-    speed=cfg.forward_speed,
-    dur_ms=_dur(cfg, cfg.search_forward_dur_ms, mem),
-    reason=reason,
-  )
-
-
 def _spin_target_ms(cfg: PlayConfig, deg: int) -> int:
   return max(1, int(deg) * max(1, int(cfg.turn_ms_per_deg)))
 
@@ -436,6 +399,103 @@ def _plan_lost(
   )
 
 
+def _seek_next_dir(mem: PlayMemory, sectors: dict[str, Any], cfg: PlayConfig) -> str:
+  """After a station look, roll toward the freer side — prefer not retracing."""
+  left_m = _finite_m(sectors.get("left")) or 0.0
+  right_m = _finite_m(sectors.get("right")) or 0.0
+  freer = "turn_left" if left_m >= right_m else "turn_right"
+  other = "turn_right" if freer == "turn_left" else "turn_left"
+  other_m = right_m if other == "turn_right" else left_m
+  if mem.last_roll_dir == freer and other_m >= cfg.sector_block_m:
+    return other
+  if abs(left_m - right_m) < 0.25 and mem.last_roll_dir in ("turn_left", "turn_right"):
+    return other
+  return freer
+
+
+def _begin_seek_search(mem: PlayMemory) -> None:
+  if mem.search_phase:
+    return
+  if mem.had_person and mem.last_person_side in ("left", "right"):
+    mem.search_phase = "recover"
+    mem.search_dir = "turn_left" if mem.last_person_side == "left" else "turn_right"
+  else:
+    mem.search_phase = "scan"
+    if mem.search_dir not in ("turn_left", "turn_right"):
+      mem.search_dir = "turn_left"
+  mem.spun_ms = 0
+  mem.wander_i = 0
+
+
+def _seek_map(mem: PlayMemory, cfg: PlayConfig) -> OccupancyMap:
+  if mem.explore is None:
+    mem.explore = OccupancyMap(res_m=cfg.map_res_m, size_m=cfg.map_size_m)
+  return mem.explore
+
+
+def _commit_seek(mem: PlayMemory, cfg: PlayConfig, nudge: DriveNudge) -> DriveNudge:
+  if cfg.seek_map and nudge.cmd != "idle" and nudge.dur_ms > 0:
+    _seek_map(mem, cfg).apply_nudge(nudge, cfg)
+  return nudge
+
+
+def _seek_should_giveup(mem: PlayMemory, cfg: PlayConfig) -> bool:
+  if mem.lost_ticks >= max(1, cfg.seek_giveup_ticks):
+    return True
+  if cfg.seek_giveup_s > 0 and mem.explore is not None:
+    return mem.explore.elapsed_s() >= cfg.seek_giveup_s
+  return False
+
+
+def _pick_seek_heading(
+  mem: PlayMemory,
+  sectors: dict[str, Any],
+  cfg: PlayConfig,
+  *,
+  blocked: bool = False,
+) -> tuple[str, int, bool]:
+  bearing = None
+  if cfg.seek_map and mem.explore is not None:
+    bearing = mem.explore.frontier_bearing_deg()
+    if bearing is not None and blocked and abs(bearing) <= 40.0:
+      bearing = None
+  if bearing is not None:
+    direction = "turn_left" if bearing > 0 else "turn_right"
+    face_ms = max(80, int(min(180.0, abs(bearing)) * max(1, int(cfg.turn_ms_per_deg))))
+    return direction, face_ms, abs(bearing) <= 50.0
+  direction = _seek_next_dir(mem, sectors, cfg)
+  if int(cfg.seek_face_deg) <= 0:
+    return direction, 80, True
+  return direction, _spin_target_ms(cfg, int(cfg.seek_face_deg)), False
+
+
+def _seek_boxed_in(
+  *,
+  closest_m: Optional[float],
+  floor_ahead_pct: Optional[float],
+  blocked: bool,
+) -> bool:
+  if blocked:
+    return True
+  if closest_m is not None and closest_m < 0.9:
+    return True
+  if floor_ahead_pct is not None and floor_ahead_pct < 0.22:
+    return True
+  return False
+
+
+def _seek_spin_nudge(mem: PlayMemory, cfg: PlayConfig, *, target_ms: int, reason: str) -> DriveNudge:
+  remaining = max(80, target_ms - mem.spun_ms)
+  dur = min(max(80, int(cfg.search_turn_dur_ms)), remaining)
+  mem.spun_ms += dur
+  return DriveNudge(
+    mem.search_dir,
+    speed=cfg.seek_turn_speed,
+    dur_ms=dur,
+    reason=reason,
+  )
+
+
 def plan_seek(
   scene: dict[str, Any],
   mem: PlayMemory,
@@ -443,11 +503,12 @@ def plan_seek(
   *,
   heading_error_deg: Optional[float] = None,
 ) -> DriveNudge:
-  """Wander the room until a person is seen, then follow until close (found).
+  """Look around the room until a person is seen, then follow until close (found).
 
-  While lost, roll forward when the path is clear and turn to look around —
-  do not spin in place or chase last-voice DoA. Give up after
-  ``seek_giveup_ticks`` so the game cannot run forever.
+  Lost: recover toward the last exit side, then one 360° look, face the next
+  heading, and cruise straight until boxed in. Escape with reverse plus a ~90°
+  turn, then cruise again. Do not chase last-voice DoA. Give up after
+  ``seek_giveup_s`` or ``seek_giveup_ticks``.
   """
   person = nearest_person(scene)
   if person is not None:
@@ -455,8 +516,12 @@ def plan_seek(
     if person_m is not None and person_m <= cfg.found_m:
       mem.lost_ticks = 0
       mem.wander_i = 0
+      mem.search_phase = ""
+      mem.spun_ms = 0
       return DriveNudge("idle", reason="found", person=person)
-    return plan_follow(scene, mem, cfg, heading_error_deg=heading_error_deg)
+    return _commit_seek(
+      mem, cfg, plan_follow(scene, mem, cfg, heading_error_deg=heading_error_deg)
+    )
   return _plan_seek_lost(scene, mem, cfg)
 
 
@@ -466,10 +531,117 @@ def _plan_seek_lost(
   cfg: PlayConfig,
 ) -> DriveNudge:
   mem.lost_ticks += 1
-  if mem.lost_ticks >= max(1, cfg.seek_giveup_ticks):
+  if cfg.seek_map:
+    _seek_map(mem, cfg).integrate(scene)
+  if _seek_should_giveup(mem, cfg):
     return DriveNudge("idle", reason="giveup")
-  _clear_stuck(mem)
-  return _wander_look_then_go(mem, cfg, reason="search")
+  exited = mem.last_person_side in ("left", "right")
+  if mem.had_person and not exited and not mem.search_phase:
+    if mem.lost_ticks <= max(0, cfg.lost_ticks_max):
+      return DriveNudge("idle", reason="lost")
+
+  sectors = scene.get("sectors") if isinstance(scene.get("sectors"), dict) else {}
+  closest_m = _finite_m(scene.get("closest_m"))
+  center_m = _finite_m(sectors.get("center"))
+  floor_ahead_pct = _floor_pct(scene)
+  blocked = _blocked_ahead_of_person(
+    person_m=None,
+    closest_m=closest_m,
+    center_m=center_m,
+    cfg=cfg,
+    floor_ahead_pct=floor_ahead_pct,
+  )
+  boxed = _seek_boxed_in(
+    closest_m=closest_m, floor_ahead_pct=floor_ahead_pct, blocked=blocked
+  )
+  if boxed and mem.search_phase in ("", "scan", "face", "roll"):
+    mem.search_phase = "escape"
+    mem.wander_i = 0
+    mem.spun_ms = 0
+  if mem.search_phase == "escape":
+    if mem.wander_i == 0:
+      mem.wander_i = 1
+      return _commit_seek(
+        mem,
+        cfg,
+        DriveNudge(
+          "backward",
+          speed=cfg.backward_speed,
+          dur_ms=_dur(cfg, cfg.backward_dur_ms, mem),
+          reason="search",
+        ),
+      )
+    mem.search_dir = _freer_turn(sectors, mem, jitter=cfg.alive_jitter)
+    mem.last_roll_dir = mem.search_dir
+    mem.search_phase = "roll"
+    mem.had_scan = True
+    mem.spun_ms = 0
+    mem.wander_i = 0
+    return _commit_seek(
+      mem, cfg, _seek_spin_nudge(mem, cfg, target_ms=_spin_target_ms(cfg, 90), reason="search")
+    )
+
+  _begin_seek_search(mem)
+  recover_ms = _spin_target_ms(cfg, cfg.follow_recover_deg)
+  scan_ms = _spin_target_ms(cfg, cfg.follow_spin_deg)
+  face_ms = mem.face_target_ms if mem.face_target_ms > 0 else _spin_target_ms(cfg, max(0, int(cfg.seek_face_deg)))
+
+  if mem.search_phase == "recover" and mem.spun_ms >= recover_ms:
+    mem.search_phase = "roll"
+    mem.had_scan = True
+    mem.wander_i = 0
+    mem.spun_ms = 0
+  if mem.search_phase == "scan" and mem.spun_ms >= scan_ms:
+    mem.had_scan = True
+    if cfg.seek_map and mem.explore is not None:
+      mem.explore.mark_station()
+    direction, face_ms, skip_face = _pick_seek_heading(mem, sectors, cfg, blocked=blocked)
+    mem.search_dir = direction
+    mem.last_roll_dir = direction
+    mem.face_target_ms = face_ms
+    mem.spun_ms = 0
+    if skip_face:
+      mem.search_phase = "roll"
+      mem.wander_i = 0
+    else:
+      mem.search_phase = "face"
+  if mem.search_phase == "face" and mem.spun_ms >= (mem.face_target_ms or face_ms):
+    mem.search_phase = "roll"
+    mem.wander_i = 0
+  if mem.search_phase == "roll":
+    if boxed:
+      mem.search_phase = "escape"
+      mem.wander_i = 0
+      mem.spun_ms = 0
+      return _commit_seek(
+        mem,
+        cfg,
+        DriveNudge(
+          "backward",
+          speed=cfg.backward_speed,
+          dur_ms=_dur(cfg, cfg.backward_dur_ms, mem),
+          reason="search",
+        ),
+      )
+    mem.wander_i += 1
+    return _commit_seek(
+      mem,
+      cfg,
+      DriveNudge(
+        "forward",
+        speed=cfg.forward_speed,
+        dur_ms=_dur(cfg, cfg.search_forward_dur_ms, mem),
+        reason="search",
+      ),
+    )
+
+  if mem.search_phase == "recover":
+    return _commit_seek(mem, cfg, _seek_spin_nudge(mem, cfg, target_ms=recover_ms, reason="recover"))
+  if mem.search_phase == "face":
+    return _commit_seek(
+      mem, cfg, _seek_spin_nudge(mem, cfg, target_ms=mem.face_target_ms or face_ms, reason="search")
+    )
+  return _commit_seek(mem, cfg, _seek_spin_nudge(mem, cfg, target_ms=scan_ms, reason="scan"))
 
 
 def plan(
