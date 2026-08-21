@@ -18,7 +18,7 @@ With `audio.respeaker.trust_aec: true` (respeaker profile default):
 - **No post-reply echo / fresh-speech gate** — mic opens immediately after a reply (the old 2.5 s `Fresh-speech wait` was dropping real turns).
 - **No pause/probe barge-in** — Silero `START` while the robot talks **cancels** the reply (no holdoff / echo-match / resume).
 - **RMS barge-in** stays off; that path is for `regular-mic` only.
-- Silero still gates STT for turn boundaries; the firmware speech bit backs DoA and STT feed when Silero is slow.
+- Silero still gates STT for turn boundaries. The XVF3800 firmware speech bit is **DoA-only** (too noisy for STT); DoA is polled only while Silero says speech.
 
 ## Voice activity detection (Silero VAD)
 

@@ -211,7 +211,8 @@ def test_quiet_stt_starts_generation_when_vad_stuck() -> None:
   assert orch._can_start_generation()
 
 
-def test_firmware_doa_speech_feeds_stt_when_silero_quiet() -> None:
+def test_firmware_doa_speech_does_not_feed_stt_alone() -> None:
+  """XVF3800 speech bit flaps on ambient noise — Silero gates STT."""
   from puppet.core.audio.respeaker import DoaReading
 
   cfg = _base_cfg()
@@ -225,8 +226,9 @@ def test_firmware_doa_speech_feeds_stt_when_silero_quiet() -> None:
   orch._speech_active = False
   orch._await_fresh_speech = False
   orch._echo_quiet_until = 0.0
+  orch._respeaker_doa._last_reading = DoaReading(azimuth_deg=185, speech_detected=True)
   assert not orch._should_feed_stt()
-  orch._respeaker_doa._last_reading = DoaReading(azimuth_deg=90, speech_detected=True)
+  vad._speech = True
   assert orch._should_feed_stt()
 
 

@@ -437,9 +437,13 @@ class RespeakerDoaMonitor:
     self.poll(speech_active=speech_active)
 
   def poll(self, *, speech_active: bool = True) -> DoaReading | None:
-    if not self._track:
+    """Read DoA only while Silero says speech.
+
+    The XVF3800 speech bit alone is noisy (often stuck on one azimuth with
+    ambient noise). Polling always floods logs and latches bad headings.
+    """
+    if not self._track or not speech_active:
       return None
-    del speech_active
     now = time.monotonic()
     if now - self._last_poll < self._poll_s:
       return self._last_reading

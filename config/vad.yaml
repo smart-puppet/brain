@@ -1,12 +1,12 @@
 # Silero VAD — utterance start/end on the same 16 kHz PCM Nemotron sees.
-# ReSpeaker firmware VAD is a DoA speech flag (face-speaker), not STT turn-taking.
-# gate_stt: true (respeaker profile) feeds Nemotron only during speech + tail.
+# ReSpeaker firmware VAD is a DoA speech flag (face-speaker only) — too noisy for STT.
+# gate_stt: true (respeaker profile) feeds Nemotron only during Silero speech + tail.
 # Tune silence timing here; enable/gate_stt defaults come from config/profiles/*.yaml
 
 vad:
   backend: silero
   model_path: models/vad/silero_vad.onnx
-  threshold: 0.25            # start a bit earlier (end is threshold-0.15)
+  threshold: 0.5            # higher = fewer false starts on ambient/fan noise
   min_silence_duration_ms: 450  # was 175 — word dips were closing the turn
   speech_pad_ms: 30
   pre_roll_ms: 400               # audio kept while STT is gated; flushed on START

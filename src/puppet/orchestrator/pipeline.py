@@ -919,9 +919,8 @@ class Orchestrator:
       return True
     if self._stt_tail_until and time.monotonic() < self._stt_tail_until:
       return True
-    if self._speech_active or self._vad.is_speech:
-      return True
-    return self._respeaker_doa.firmware_speech
+    # Silero only — XVF3800 firmware speech bit is too noisy for STT gating.
+    return self._speech_active or self._vad.is_speech
 
   def _maybe_confirm_user_interrupt(self, text: str) -> bool:
     """True if STT during a reply is the child, not Piper echoing into the mic."""
@@ -1812,7 +1811,7 @@ class Orchestrator:
   def _handle_audio_chunk(self, mic: np.ndarray, sample_rate: int) -> None:
     self._last_mic_rms = rms_energy(mic)
     self._handle_vad_events(mic)
-    self._respeaker_doa.poll()
+    self._respeaker_doa.poll(speech_active=self._user_speaking_now())
     self._unlock_fresh_speech()
     if (
       self._respeaker_interrupt_enabled
