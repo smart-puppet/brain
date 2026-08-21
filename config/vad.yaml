@@ -7,7 +7,7 @@ vad:
   backend: silero
   model_path: models/vad/silero_vad.onnx
   threshold: 0.5            # higher = fewer false starts on ambient/fan noise
-  min_silence_duration_ms: 450  # was 175 — word dips were closing the turn
+  min_silence_duration_ms: 150 
   speech_pad_ms: 30
   pre_roll_ms: 400               # audio kept while STT is gated; flushed on START
   force_cpu: true
