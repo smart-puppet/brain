@@ -5,27 +5,37 @@
 | Stage | Typical rate |
 |-------|----------------|
 | Mic / STT (parakeet) | 16 kHz mono float32 |
-| TTS (Piper) | 22.05 kHz mono int16 |
+| TTS (Piper) | 22.05 kHz mono int16 → stereo on ReSpeaker |
 
-Default mic profile is `respeaker` (`config/default.yaml`). See [config/README.md](../config/README.md) for the full file map. ReSpeaker gates STT on Silero and barges in by pausing TTS, then decoding.
+Default mic profile is `respeaker` (`config/default.yaml`). See [config/README.md](../config/README.md) for the full file map.
+
+## ReSpeaker XVF3800 + hardware AEC (`trust_aec`)
+
+Play TTS on the array’s **stereo analog sink** so the XVF3800 far-end reference matches the speaker. Capture is AEC-cleaned — treat residual TTS as gone.
+
+With `audio.respeaker.trust_aec: true` (respeaker profile default):
+
+- **No post-reply echo / fresh-speech gate** — mic opens immediately after a reply (the old 2.5 s `Fresh-speech wait` was dropping real turns).
+- **No pause/probe barge-in** — Silero `START` while the robot talks **cancels** the reply (no holdoff / echo-match / resume).
+- **RMS barge-in** stays off; that path is for `regular-mic` only.
+- Silero still gates STT for turn boundaries; the firmware speech bit backs DoA and STT feed when Silero is slow.
 
 ## Voice activity detection (Silero VAD)
 
-ReSpeaker firmware already flags speech for **direction of arrival** (DoA / face-the-speaker). That hardware bit is **not** the STT gate. Silero runs on the same 16 kHz PCM that Nemotron decodes, with hysteresis (start ≥ threshold, end after `min_silence_duration_ms`), so the brain knows when an utterance **starts and ends**. The LLM waits for Silero `END` plus STT gap/tail — that is why Silero stays on even though the array has its own VAD.
+ReSpeaker firmware flags speech for **DoA / face-the-speaker**. Silero runs on the same 16 kHz PCM Nemotron sees, with hysteresis, so the brain knows utterance **start and end**. The LLM waits for Silero `END` plus STT gap/tail — or starts after STT has been quiet ~0.8 s if VAD stays open.
 
-- **STT gating** (`vad.gate_stt`): when `true` (ReSpeaker default), Nemotron is fed only while Silero says speech, plus a short tail after `END`. Silence and post-reply echo are **not** decoded. On `START` the streaming decoder is reset and ~400 ms of pre-roll is flushed in, so leftover TTS is not sitting in the 4.5 s left context.
-- **Barge-in during TTS** (`audio.respeaker.interrupt_while_speaking`): Silero speech while Piper is playing → holdoff (ignore bleed) → **pause TTS**, reset STT, decode. If the text is the robot, playback resumes and a cooldown blocks another pause on the same bleed. If it is the user, the reply is cancelled and the new transcript is kept. RMS barge-in (`puppet.barge_in_enabled`) stays off on ReSpeaker because AEC residual is loud.
-- Chunks are buffered internally to Silero's required **512-sample windows** (32 ms at 16 kHz).
+- **STT gating** (`vad.gate_stt`): feed Nemotron only while Silero (or firmware speech) says speech, plus a short tail after `END`.
+- Chunks are buffered to Silero’s **512-sample windows** (32 ms at 16 kHz).
 
-Mic-specific VAD/barge-in defaults live in `config/profiles/respeaker.yaml` or `config/profiles/regular-mic.yaml`. Silence timing in `config/vad.yaml`:
+Mic-specific defaults: `config/profiles/respeaker.yaml` or `regular-mic.yaml`. Timing in `config/vad.yaml`:
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `threshold` | 0.25 | Speech probability to open a turn (end at threshold − 0.15) |
+| `threshold` | 0.25 | Speech probability to open a turn (end is threshold − 0.15) |
 | `min_silence_duration_ms` | 450 | Silence before VAD declares speech ended |
 | `force_cpu` | true | Keep VAD on CPU (leave GPU for LLM) |
 
-For a regular USB mic, set `profile: regular-mic` in `config/default.yaml` and use PulseAudio/PipeWire AEC.
+For a generic USB mic, set `profile: regular-mic` (software barge-in + echo quiet gate).
 
 Download models once: `./scripts/download_models.sh`
 
@@ -33,11 +43,11 @@ Download models once: `./scripts/download_models.sh`
 
 After a warm host reboot, the ReSpeaker can enumerate but deliver broken USB audio until its firmware is rebooted (Seeed workaround). Puppet can do this automatically before opening the mic:
 
-See `config/profiles/respeaker.yaml` for USB reset and interrupt settings.
+See `config/profiles/respeaker.yaml` for USB reset settings.
 
 `usb_cycle` toggles Linux sysfs `authorized` (0→1), which is often closer to a physical unplug/replug than a plain USBDEVFS reset.
 
-During a reply on ReSpeaker, Nemotron is **not** fed while Piper talks. Silero speech after a short holdoff pauses TTS, resets STT, then decodes. The reply is cancelled only when that text does **not** match the current TTS phrase (`puppet.interrupt_min_chars`); otherwise playback resumes with a cooldown so speaker bleed cannot chop the same sentence. After a short canned play line (“found you” / hide-and-seek count), overlapping speech is remembered so a greeting is not dropped. Count-to-ten is not barge-in paused (speaker bleed was chopping the countdown and blocking the search). Cancelling seek aborts that announce so a button restart does not wait on the leftover count.
+Canned play announces (hide-and-seek count / “found you”) still skip AEC cancel so a short residual cannot abort the countdown. Cancelling seek aborts that announce so a button restart does not wait on the leftover count.
 
 #### Linux permissions for software reset (important)
 
@@ -115,7 +125,8 @@ If you disable VAD (`vad.enabled: false`), speech detection falls back to mic RM
 - **STT**: parakeet streaming — partial words appended to `conversation.draft_user` immediately
 - **LLM**: starts only after **VAD reports silence** (plus STT gap/tail), so generation is not cancelled mid-utterance
 - **TTS**: phrase-level Piper streaming as soon as sentence boundaries appear in LLM output
-- **Interrupts**: VAD + STT classify noise (restart same context) vs real speech (append to draft, regenerate)
+- **Interrupts (ReSpeaker AEC)**: Silero speech during TTS cancels the reply
+- **Interrupts (regular-mic)**: RMS barge-in and/or pause/probe paths in the profile
 
 ### Streaming config (`config/puppet.yaml`)
 
@@ -125,10 +136,8 @@ If you disable VAD (`vad.enabled: false`), speech detection falls back to mic RM
 | `stt_tail_ms` | 800 | Keep feeding STT after VAD end (covers 320ms Nemotron chunk) |
 | `min_user_chars` | 3 | Minimum draft length to trigger LLM |
 | `restart_on_partial` | true | Restart LLM when new STT words arrive during generation |
-| `interrupt_min_chars` | 4 | STT length to treat interrupt as real speech |
-| `interrupt_eval_ms` | 700 | Window to capture interrupt speech |
-| `barge_in_grace_ms` | 1500 | Ignore barge-in at the start of a reply |
-| `fresh_speech_timeout_ms` | 2500 | Reopen mic if a greeting overlapped TTS |
+| `echo_quiet_ms` / `fresh_speech_timeout_ms` | 0 on ReSpeaker | Post-reply bleed gate (regular-mic); disabled with `trust_aec` |
+| `barge_in_grace_ms` | 1500 | RMS barge-in only (`regular-mic`) |
 
 After each completed reply, `run_puppet` logs one INFO line. The headline and the three bar segments are the same number (VAD end → first audible speech):
 

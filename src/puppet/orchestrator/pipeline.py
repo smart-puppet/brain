@@ -165,16 +165,23 @@ class Orchestrator:
     self._echo_quiet_until = 0.0
     self._await_fresh_since = 0.0
     self._speech_during_guard = False
-    self._fresh_speech_timeout_s = (
-      max(400, int(puppet_cfg.get("fresh_speech_timeout_ms", 2500))) / 1000.0
-    )
+    fresh_ms = int(puppet_cfg.get("fresh_speech_timeout_ms", 2500))
+    # 0 = disabled (ReSpeaker AEC). Otherwise keep a small floor so the gate can expire.
+    self._fresh_speech_timeout_s = 0.0 if fresh_ms <= 0 else max(400, fresh_ms) / 1000.0
     self._reply_in_progress = False
     self._play_announce_active = False
     self._respeaker_cfg = audio_cfg.get("respeaker", {}) or {}
+    self._trust_aec = bool(self._respeaker_cfg.get("trust_aec", False))
     self._pause_tts_on_speech = bool(self._respeaker_cfg.get("pause_tts_on_speech", False))
+    # Pause/probe barge-in is for bleed without hardware AEC. With trust_aec, Silero
+    # speech during TTS cancels the reply directly (mic is already far-end cancelled).
     self._respeaker_interrupt_enabled = bool(
-      self._respeaker_cfg.get("interrupt_while_speaking", True)
-    )
+      self._respeaker_cfg.get("interrupt_while_speaking", not self._trust_aec)
+    ) and not self._trust_aec
+    if self._trust_aec:
+      self._echo_quiet_s = 0.0
+      self._post_reply_echo_s = 0.0
+      self._fresh_speech_timeout_s = 0.0
     self._respeaker_interrupt_timeout_s = (
       max(100, int(self._respeaker_cfg.get("interrupt_timeout_ms", 1800))) / 1000.0
     )
@@ -513,8 +520,25 @@ class Orchestrator:
     self.stt.reset()
     self._flush_stt_pre_roll()
 
+  def _resume_open_listen(self) -> None:
+    """Reopen the mic immediately (ReSpeaker AEC — no post-reply echo gate)."""
+    self._await_fresh_speech = False
+    self._speech_during_guard = False
+    self._echo_quiet_until = 0.0
+    self._echo_unlock_after = 0.0
+    self._await_fresh_since = 0.0
+    self.conversation.draft_user = ""
+    self._last_stt_at = 0.0
+    self._stt_tail_until = 0.0
+    self.stt.reset()
+    self._flush_stt_pre_roll()
+    self._latency.clear_speech_window()
+
   def _enter_post_reply_listen(self) -> None:
-    """Block speaker bleed from being drafted until the user speaks again."""
+    """After a reply: either open immediately (AEC) or gate bleed (regular mic)."""
+    if self._trust_aec or (self._post_reply_echo_s <= 0 and self._echo_quiet_s <= 0):
+      self._resume_open_listen()
+      return
     held = self._speech_during_guard or self._user_speaking_now()
     self._mark_echo_risk(duration_s=self._post_reply_echo_s)
     self._await_fresh_speech = True
@@ -567,8 +591,11 @@ class Orchestrator:
     self._playback_started_at = 0.0
     self._barge_clean_since = 0.0
     self._set_state(PipelineState.LISTENING)
-    self._enter_post_reply_listen()
-    self._vad.reset()
+    if self._trust_aec:
+      self._resume_open_listen()
+    else:
+      self._enter_post_reply_listen()
+      self._vad.reset()
     self._latency.reset()
     self._trace.reset()
     self.bus.emit("playback_cancelled")
@@ -798,6 +825,10 @@ class Orchestrator:
 
   def _unlock_fresh_speech(self) -> None:
     """Resume STT after post-reply echo guard once VAD sees new speech."""
+    if self._trust_aec:
+      if self._await_fresh_speech:
+        self._resume_open_listen()
+      return
     if not self._await_fresh_speech or self.state != PipelineState.LISTENING:
       return
     if self._tts_playback_active:
@@ -806,7 +837,8 @@ class Orchestrator:
     if now < self._echo_unlock_after:
       return
     timed_out = (
-      self._await_fresh_since > 0
+      self._fresh_speech_timeout_s > 0
+      and self._await_fresh_since > 0
       and now - self._await_fresh_since > self._fresh_speech_timeout_s
     )
     speaking = self._user_speaking_now()
@@ -836,6 +868,14 @@ class Orchestrator:
         self._speech_active = True
         self._respeaker_doa.clear_utterance()
         if (
+          self._trust_aec
+          and self._reply_still_active()
+          and not self._play_announce_active
+        ):
+          # Hardware AEC: speech on the cleaned mic is the user — cancel, no probe.
+          logger.info("Speech during TTS (AEC) — cancelling reply")
+          self._cancel_reply()
+        elif (
           self._await_fresh_speech
           or self._tts_playback_active
           or self._reply_still_active()

@@ -236,7 +236,7 @@ def test_gap_starts_generation_without_eou(orchestrator: Orchestrator) -> None:
   orchestrator._last_stt_at = time.monotonic() - 1.0
   orchestrator._tick_gap()
   _wait_for_generation(orchestrator)
-  assert orchestrator.conversation.messages[-1].role == "assistant
+  assert orchestrator.conversation.messages[-1].role == "assistant"
 
 
 def test_gap_waits_for_stt_tail(orchestrator: Orchestrator) -> None:
@@ -963,6 +963,45 @@ def test_fresh_speech_timeout_reopens_mic_without_speech() -> None:
   orch._unlock_fresh_speech()
 
   assert not orch._await_fresh_speech
+
+
+def test_trust_aec_skips_fresh_speech_gate() -> None:
+  cfg = _base_cfg()
+  cfg["audio"]["respeaker"] = {"trust_aec": True}
+  cfg["puppet"]["echo_quiet_ms"] = 2000
+  cfg["puppet"]["fresh_speech_timeout_ms"] = 2500
+  orch = _with_fake_playback(
+    Orchestrator(cfg, stt=FakeStt(), llm=FakeLlm(), tts=FakeTts())
+  )
+  assert orch._trust_aec
+  assert not orch._respeaker_interrupt_enabled
+  orch._enter_post_reply_listen()
+  assert not orch._await_fresh_speech
+  assert orch._echo_quiet_until == 0.0
+
+
+def test_trust_aec_cancels_on_silero_during_tts() -> None:
+  cfg = _base_cfg()
+  cfg["audio"]["respeaker"] = {"trust_aec": True}
+  cfg["vad"] = {"enabled": True, "gate_stt": True}
+  vad = StartOnceVad()
+  orch = _with_fake_playback(
+    Orchestrator(cfg, stt=FakeStt(), llm=FakeLlm(), tts=FakeTts(), vad=vad)
+  )
+  fake_playback = FakePlayback(busy=True)
+  orch._tts_pipeline = fake_playback  # type: ignore[assignment]
+  orch._worker._phrase_playback = fake_playback
+  orch._reply_in_progress = True
+  orch._tts_playback_active = True
+  orch._set_state(PipelineState.SPEAKING)
+
+  orch._handle_audio_chunk(np.zeros(320, dtype=np.float32), 16000)
+  orch._handle_audio_chunk(np.zeros(320, dtype=np.float32), 16000)
+
+  assert fake_playback.stop_calls >= 1
+  assert orch.state == PipelineState.LISTENING
+  assert not orch._await_fresh_speech
+  assert not orch._reply_in_progress
 
 
 def test_interrupt_cancel_unmutes_playback_for_next_reply() -> None:

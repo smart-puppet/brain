@@ -13,14 +13,14 @@ puppet:
   min_first_phrase_chars: 8
   first_phrase_max_wait_ms: 0
 
-  # --- Echo / bleed guard (post-reply) ---
+  # --- Echo / bleed guard (regular-mic; ReSpeaker trust_aec forces these to 0) ---
   echo_quiet_ms: 2000
   post_reply_echo_ms: 1200
-  fresh_speech_timeout_ms: 2500  # reopen mic if greeting overlapped TTS
+  fresh_speech_timeout_ms: 2500  # 0 = disabled
   tts_echo_word_overlap: 0.45
   tts_echo_trigram_overlap: 0.35
 
-  # --- Barge-in (regular-mic profile enables this) ---
+  # --- Barge-in (regular-mic profile enables this; ReSpeaker uses Silero cancel) ---
   barge_in_clean_ms: 400
   barge_in_clean_rms: 0.015
   barge_in_cooldown_ms: 2500
