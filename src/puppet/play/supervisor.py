@@ -265,20 +265,14 @@ class PlaySupervisor:
     while not self._stop.wait(self._tick_s):
       with self._lock:
         mode = self._mode
-        pending = self._pending_announce
       busy = self._is_busy()
       if mode in ("follow", "seek") and busy != last_busy:
         last_busy = busy
         with self._lock:
           self._status = {**self._status, "mode": mode, "busy": busy}
         self._publish_status()
-      if mode == "idle":
-        last_busy = None
-        if not pending:
-          continue
-      if busy:
-        # Skip motion ticks; status.busy pauses the DeepStream camera pipeline.
-        continue
+      # Run seek/found announce even while the voice pipeline is busy — otherwise
+      # the 1–10 count waits until chat TTS / Silero goes quiet ("started later").
       kind = self.take_pending_announce()
       if kind:
         if kind == "seek":
@@ -290,6 +284,10 @@ class PlaySupervisor:
             logger.exception("Play announce failed (%s)", kind)
         continue
       if mode == "idle":
+        last_busy = None
+        continue
+      if busy:
+        # Skip motion ticks; status.busy pauses the DeepStream camera pipeline.
         continue
       result = self._scene.request_capture()
       if not result.get("ok"):

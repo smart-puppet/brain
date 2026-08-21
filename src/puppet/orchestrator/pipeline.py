@@ -869,10 +869,12 @@ class Orchestrator:
         self._respeaker_doa.clear_utterance()
         if (
           self._trust_aec
-          and self._reply_still_active()
+          and self._tts_playback_active
           and not self._play_announce_active
         ):
-          # Hardware AEC: speech on the cleaned mic is the user — cancel, no probe.
+          # Hardware AEC: speech while Piper is playing is the user. Do not cancel
+          # during THINKING — Silero often retriggers on the same utterance that
+          # started the reply and would abort before any audio plays.
           logger.info("Speech during TTS (AEC) — cancelling reply")
           self._cancel_reply()
         elif (
@@ -1210,6 +1212,19 @@ class Orchestrator:
     text = play_phrase(reason, self._vision_lang)
     if not text:
       return
+    # Seek/follow from Eye must not wait for an in-flight chat reply to finish.
+    if (
+      (self._reply_in_progress or self._worker.active)
+      and not self._play_announce_active
+    ):
+      logger.info("Play announce %s — stopping current reply first", reason)
+      self._reply_in_progress = False
+      self._abort_playback()
+      self._worker.stop()
+      self._tts_pipeline.stop()
+      self._stop_tts_playback()
+      self._unmute_playback()
+      self._resume_stt_after_llm()
     logger.info("Play announce %s: %s", reason, text)
     self._play_announce_active = True
     self._reply_in_progress = True

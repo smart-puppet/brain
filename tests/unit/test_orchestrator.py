@@ -1004,6 +1004,29 @@ def test_trust_aec_cancels_on_silero_during_tts() -> None:
   assert not orch._reply_in_progress
 
 
+def test_trust_aec_does_not_cancel_while_thinking() -> None:
+  cfg = _base_cfg()
+  cfg["audio"]["respeaker"] = {"trust_aec": True}
+  cfg["vad"] = {"enabled": True, "gate_stt": True}
+  vad = StartOnceVad()
+  orch = _with_fake_playback(
+    Orchestrator(cfg, stt=FakeStt(), llm=FakeLlm(), tts=FakeTts(), vad=vad)
+  )
+  fake_playback = FakePlayback(busy=True)
+  orch._tts_pipeline = fake_playback  # type: ignore[assignment]
+  orch._worker._phrase_playback = fake_playback
+  orch._reply_in_progress = True
+  orch._tts_playback_active = False
+  orch._set_state(PipelineState.THINKING)
+
+  orch._handle_audio_chunk(np.zeros(320, dtype=np.float32), 16000)
+  orch._handle_audio_chunk(np.zeros(320, dtype=np.float32), 16000)
+
+  assert fake_playback.stop_calls == 0
+  assert orch._reply_in_progress
+  assert orch.state == PipelineState.THINKING
+
+
 def test_interrupt_cancel_unmutes_playback_for_next_reply() -> None:
   cfg = _base_cfg()
   orch = _with_fake_playback(
