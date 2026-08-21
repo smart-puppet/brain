@@ -10,6 +10,7 @@ from typing import Callable, Iterator
 import numpy as np
 import pyaudio
 
+from puppet.core.audio.pcm import int16_mono_to_device
 from puppet.core.types import AudioChunk
 
 logger = logging.getLogger(__name__)
@@ -179,16 +180,19 @@ class AudioPlayback:
     sample_rate: int,
     channels: int = 1,
     device_index: int | None = None,
+    device_rate: int | None = None,
     frames_per_buffer: int = 512,
     write_chunk_frames: int = 256,
     on_samples_committed: Callable[[], None] | None = None,
   ) -> None:
     self.sample_rate = sample_rate
-    self.channels = channels
+    self.channels = max(1, int(channels))
+    self._device_rate = int(device_rate or sample_rate)
     self.device_index = device_index
     self._on_samples_committed = on_samples_committed
     self._frames_per_buffer = max(1, int(frames_per_buffer))
-    self._frame_bytes = channels * 2
+    self._frame_bytes = self.channels * 2
+    self._src_sample_carry = 0
     stream_bytes = max(self._frame_bytes, self._frames_per_buffer * self._frame_bytes)
     chunk_bytes = max(self._frame_bytes, write_chunk_frames * self._frame_bytes)
     self._write_chunk_bytes = min(chunk_bytes, stream_bytes)
@@ -201,19 +205,31 @@ class AudioPlayback:
     self._aborted = False
     _prefer_short_device_buffers()
     self._pa = pyaudio.PyAudio()
+    if device_index is None:
+      info = self._pa.get_default_output_device_info()
+      self.device_index = int(info["index"])
+    else:
+      info = self._pa.get_device_info_by_index(int(device_index))
+      self.device_index = int(device_index)
+    self.device_name = str(info.get("name", f"device-{self.device_index}"))
     self._stream = self._pa.open(
       format=CAPTURE_FORMAT,
-      channels=channels,
-      rate=sample_rate,
+      channels=self.channels,
+      rate=self._device_rate,
       output=True,
-      output_device_index=device_index,
+      output_device_index=self.device_index,
       frames_per_buffer=self._frames_per_buffer,
     )
     self._device_latency_ms = _stream_latency_ms(self._stream, output=True)
-    period_ms = self._frames_per_buffer * 1000.0 / max(1, sample_rate)
+    period_ms = self._frames_per_buffer * 1000.0 / max(1, self._device_rate)
     logger.info(
-      "Speaker opened: %s Hz, period=%d frames (%.0fms), write=%d frames, device_latency=%.0fms",
-      sample_rate,
+      "Speaker opened: %r (index=%s) %s Hz %sch (src %s Hz mono), "
+      "period=%d frames (%.0fms), write=%d frames, device_latency=%.0fms",
+      self.device_name,
+      self.device_index,
+      self._device_rate,
+      self.channels,
+      self.sample_rate,
       self._frames_per_buffer,
       period_ms,
       max(1, int(write_chunk_frames)),
@@ -223,10 +239,16 @@ class AudioPlayback:
   def play_int16(self, pcm: bytes) -> None:
     if not pcm:
       return
+    device_pcm = int16_mono_to_device(
+      pcm,
+      src_rate=self.sample_rate,
+      dst_rate=self._device_rate,
+      dst_channels=self.channels,
+    )
     with self._lock:
       if self._aborted:
         return
-      self._write_buffer.extend(pcm)
+      self._write_buffer.extend(device_pcm)
     while True:
       with self._lock:
         if self._aborted:
@@ -236,8 +258,12 @@ class AudioPlayback:
         block = bytes(self._write_buffer[: self._write_chunk_bytes])
         del self._write_buffer[: self._write_chunk_bytes]
       self._stream.write(block, exception_on_underflow=False)
+      device_frames = len(block) // self._frame_bytes
       with self._lock:
-        self._commit_samples(len(block) // self._frame_bytes)
+        self._src_sample_carry += device_frames * self.sample_rate
+        src_frames = self._src_sample_carry // max(1, self._device_rate)
+        self._src_sample_carry %= max(1, self._device_rate)
+        self._commit_samples(src_frames)
       if self._on_samples_committed is not None:
         self._on_samples_committed()
 
@@ -255,6 +281,7 @@ class AudioPlayback:
       self._samples_written = 0
       self._stream_anchor_time = None
       self._stream_anchor_samples = 0
+      self._src_sample_carry = 0
       self._sample_clock.notify_all()
 
   def samples_written(self) -> int:
@@ -310,8 +337,12 @@ class AudioPlayback:
       block = bytes(self._write_buffer)
       self._write_buffer.clear()
     self._stream.write(block, exception_on_underflow=False)
+    device_frames = len(block) // self._frame_bytes
     with self._lock:
-      self._commit_samples(len(block) // self._frame_bytes)
+      self._src_sample_carry += device_frames * self.sample_rate
+      src_frames = self._src_sample_carry // max(1, self._device_rate)
+      self._src_sample_carry %= max(1, self._device_rate)
+      self._commit_samples(src_frames)
     if self._on_samples_committed is not None:
       self._on_samples_committed()
 
@@ -325,7 +356,7 @@ class AudioPlayback:
     target = self.samples_written()
     if target <= 0:
       return True
-    device_s = self._frames_per_buffer / max(1, self.sample_rate)
+    device_s = self._frames_per_buffer / max(1, self._device_rate)
     if timeout is None:
       timeout = max(0.5, (target / max(1, self.sample_rate)) + device_s + 0.25)
     ok = self.wait_until_samples(target, timeout=timeout)
@@ -338,6 +369,7 @@ class AudioPlayback:
     with self._lock:
       self._aborted = True
       self._write_buffer.clear()
+      self._src_sample_carry = 0
 
   def resume(self) -> None:
     """Allow playback again after :meth:`abort`."""

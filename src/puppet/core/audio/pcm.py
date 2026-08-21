@@ -5,6 +5,30 @@ from typing import Callable
 import numpy as np
 
 
+def int16_mono_to_device(
+  pcm: bytes,
+  *,
+  src_rate: int,
+  dst_rate: int,
+  dst_channels: int,
+) -> bytes:
+  """Piper mono int16 → device PCM (ReSpeaker AEC wants stereo 16 kHz)."""
+  samples = np.frombuffer(pcm, dtype=np.int16)
+  if samples.size == 0:
+    return b""
+  audio = samples.astype(np.float32)
+  if int(src_rate) != int(dst_rate):
+    audio = resample_linear(audio, int(src_rate), int(dst_rate))
+  out = np.clip(np.rint(audio), -32768, 32767).astype(np.int16)
+  channels = max(1, int(dst_channels))
+  if channels == 1:
+    return out.tobytes()
+  interleaved = np.empty(out.size * channels, dtype=np.int16)
+  for idx in range(channels):
+    interleaved[idx::channels] = out
+  return interleaved.tobytes()
+
+
 def resample_linear(samples: np.ndarray, src_rate: int, dst_rate: int) -> np.ndarray:
   if src_rate == dst_rate or samples.size == 0:
     return samples.astype(np.float32, copy=True)

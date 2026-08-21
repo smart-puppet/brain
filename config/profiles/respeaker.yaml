@@ -2,6 +2,10 @@
 # See config/README.md
 
 audio:
+  # Stereo far-end for XVF3800 AEC. Keep Piper's 22.05 kHz — opening the
+  # Pulse stream at 16 kHz native stalls PortAudio writes (ready prompt never
+  # finishes, so the mic loop never starts). Pulse resamples 22.05 → 16 kHz.
+  output_channels: 2
   respeaker:
     usb_reset_on_start: always   # auto | always | never
     reset_method: all            # firmware | usb_port | usb_cycle | both | all
@@ -9,7 +13,7 @@ audio:
     pause_tts_on_speech: false   # unused: interrupt_while_speaking uses Silero holdoff
     interrupt_while_speaking: true  # Silero during TTS → pause Piper, clean STT, decode
     interrupt_timeout_ms: 1800     # resume TTS if the probe is not real user speech
-    interrupt_holdoff_ms: 400      # ignore short TTS-bleed spikes before pausing
+    interrupt_holdoff_ms: 800      # ignore TTS-bleed spikes before pausing
     doa_debug: true              # true + logging.level DEBUG → direction logs
     doa_poll_ms: 250
     # Auto-turn chassis toward the speaker using DoA (needs drive MQTT bridge).

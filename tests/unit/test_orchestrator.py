@@ -71,8 +71,8 @@ class FakePlayback:
   def submit(self, text: str) -> None:
     pass
 
-  def wait_done(self) -> None:
-    pass
+  def wait_done(self, timeout: float | None = None) -> None:
+    del timeout
 
   def stop(self) -> None:
     self.stop_calls += 1
@@ -192,13 +192,51 @@ def test_eou_starts_streaming_generation(orchestrator: Orchestrator) -> None:
   assert orchestrator.conversation.messages[-1].content == "Hello there."
 
 
+def test_quiet_stt_starts_generation_when_vad_stuck() -> None:
+  cfg = _base_cfg()
+  cfg["vad"] = {"enabled": True, "gate_stt": True}
+  cfg["puppet"]["stt_tail_ms"] = 200
+  cfg["puppet"]["stt_gap_ms"] = 50
+  vad = GatedVad()
+  vad._speech = True
+  orch = _with_fake_playback(
+    Orchestrator(cfg, stt=FakeStt(), llm=FakeLlm(), tts=FakeTts(), vad=vad)
+  )
+  orch._set_state(PipelineState.LISTENING)
+  orch._speech_active = True
+  orch.conversation.draft_user = "Bonjour"
+  orch._last_stt_at = time.monotonic() - 0.05
+  assert not orch._can_start_generation()
+  orch._last_stt_at = time.monotonic() - 1.0
+  assert orch._can_start_generation()
+
+
+def test_firmware_doa_speech_feeds_stt_when_silero_quiet() -> None:
+  from puppet.core.audio.respeaker import DoaReading
+
+  cfg = _base_cfg()
+  cfg["vad"] = {"enabled": True, "gate_stt": True}
+  vad = GatedVad()
+  vad._speech = False
+  orch = _with_fake_playback(
+    Orchestrator(cfg, stt=FakeStt(), llm=FakeLlm(), tts=FakeTts(), vad=vad)
+  )
+  orch._set_state(PipelineState.LISTENING)
+  orch._speech_active = False
+  orch._await_fresh_speech = False
+  orch._echo_quiet_until = 0.0
+  assert not orch._should_feed_stt()
+  orch._respeaker_doa._last_reading = DoaReading(azimuth_deg=90, speech_detected=True)
+  assert orch._should_feed_stt()
+
+
 def test_gap_starts_generation_without_eou(orchestrator: Orchestrator) -> None:
   orchestrator._set_state(PipelineState.LISTENING)
   orchestrator._on_transcript(TranscriptSegment(text="Hi"))
   orchestrator._last_stt_at = time.monotonic() - 1.0
   orchestrator._tick_gap()
   _wait_for_generation(orchestrator)
-  assert orchestrator.conversation.messages[-1].role == "assistant"
+  assert orchestrator.conversation.messages[-1].role == "assistant
 
 
 def test_gap_waits_for_stt_tail(orchestrator: Orchestrator) -> None:
@@ -249,7 +287,7 @@ def test_gap_waits_for_vad_silence() -> None:
   )
   orch._set_state(PipelineState.LISTENING)
   orch.conversation.draft_user = "Bonjour"
-  orch._last_stt_at = time.monotonic() - 1.0
+  orch._last_stt_at = time.monotonic() - 0.02
   gated_vad._speech = True
   orch._speech_active = True
 
@@ -259,6 +297,7 @@ def test_gap_waits_for_vad_silence() -> None:
 
   orch._speech_active = False
   gated_vad._speech = False
+  orch._last_stt_at = time.monotonic() - 1.0
   orch._tick_gap()
 
   assert orch._worker.active or orch.state == PipelineState.THINKING
@@ -788,6 +827,142 @@ def test_respeaker_probe_pauses_and_resumes_tts_on_noise() -> None:
   orch._resume_reply_after_noise_probe()
   assert fake_playback.resume_calls == 1
   assert not orch._respeaker_interrupt_active
+  assert orch._barge_in_cooldown_until > time.monotonic()
+
+
+def test_noise_probe_resume_does_not_immediately_repause() -> None:
+  cfg = _base_cfg()
+  cfg["audio"] = {
+    "sample_rate": 16000,
+    "channels": 1,
+    "chunk_ms": 20,
+    "respeaker": {
+      "interrupt_while_speaking": True,
+      "interrupt_holdoff_ms": 0,
+    },
+  }
+  cfg["vad"] = {"enabled": True, "gate_stt": True}
+  cfg["puppet"]["barge_in_grace_ms"] = 0
+  gated_vad = GatedVad()
+  fake_playback = FakePlayback(busy=True)
+  orch = Orchestrator(cfg, stt=FakeStt(), llm=FakeLlm(), tts=FakeTts(), vad=gated_vad)
+  orch._tts_pipeline = fake_playback  # type: ignore[assignment]
+  orch._worker._phrase_playback = fake_playback
+  orch._reply_in_progress = True
+  orch._set_state(PipelineState.SPEAKING)
+  orch._tts_playback_active = True
+  orch._playback_started_at = time.monotonic() - 5.0
+  orch._pause_reply_for_interrupt_probe()
+  orch._resume_reply_after_noise_probe()
+  gated_vad._speech = True
+  orch._speech_active = True
+  orch._tts_playback_active = True
+
+  orch._handle_audio_chunk(np.zeros(320, dtype=np.float32), 16000)
+
+  assert not orch._respeaker_interrupt_active
+  assert fake_playback.pause_calls == 1
+
+
+def test_play_announce_skips_barge_in_pause() -> None:
+  cfg = _base_cfg()
+  cfg["audio"] = {
+    "sample_rate": 16000,
+    "channels": 1,
+    "chunk_ms": 20,
+    "respeaker": {
+      "interrupt_while_speaking": True,
+      "interrupt_holdoff_ms": 0,
+    },
+  }
+  cfg["vad"] = {"enabled": True, "gate_stt": True}
+  cfg["puppet"]["barge_in_grace_ms"] = 0
+  gated_vad = GatedVad()
+  fake_playback = FakePlayback(busy=True)
+  orch = Orchestrator(cfg, stt=FakeStt(), llm=FakeLlm(), tts=FakeTts(), vad=gated_vad)
+  orch._tts_pipeline = fake_playback  # type: ignore[assignment]
+  orch._worker._phrase_playback = fake_playback
+  orch._reply_in_progress = True
+  orch._play_announce_active = True
+  orch._set_state(PipelineState.SPEAKING)
+  orch._tts_playback_active = True
+  orch._playback_started_at = time.monotonic() - 5.0
+  gated_vad._speech = True
+  orch._speech_active = True
+
+  orch._handle_audio_chunk(np.zeros(320, dtype=np.float32), 16000)
+
+  assert not orch._respeaker_interrupt_active
+  assert fake_playback.pause_calls == 0
+
+
+def test_play_announce_seek_aborts_when_mode_leaves_seek() -> None:
+  cfg = _base_cfg()
+  fake_playback = FakePlayback(busy=True)
+  orch = _with_fake_playback(
+    Orchestrator(cfg, stt=FakeStt(), llm=FakeLlm(), tts=FakeTts())
+  )
+  orch._tts_pipeline = fake_playback  # type: ignore[assignment]
+  orch._worker._phrase_playback = fake_playback
+  orch._play = type("Play", (), {"mode": "idle"})()
+  orch._vision_lang = "en"
+
+  orch._announce_play_event("seek")
+
+  assert fake_playback.stop_calls == 1
+  assert not orch._play_announce_active
+  assert orch.state == PipelineState.LISTENING
+
+
+def test_speech_during_announce_unlocks_without_new_vad_start() -> None:
+  cfg = _base_cfg()
+  cfg["vad"] = {"enabled": True, "gate_stt": True}
+  gated_vad = GatedVad()
+  orch = _with_fake_playback(
+    Orchestrator(cfg, stt=FakeStt(), llm=FakeLlm(), tts=FakeTts(), vad=gated_vad)
+  )
+  fake_stt = orch.stt
+  assert isinstance(fake_stt, FakeStt)
+  orch._set_state(PipelineState.SPEAKING)
+  orch._tts_playback_active = True
+  orch._reply_in_progress = True
+  orch._speech_active = True
+  orch._speech_during_guard = True
+
+  orch._set_state(PipelineState.LISTENING)
+  orch._tts_playback_active = False
+  orch._reply_in_progress = False
+  orch._enter_post_reply_listen()
+  assert orch._speech_during_guard
+  orch._echo_unlock_after = 0.0
+  orch._echo_quiet_until = time.monotonic() + 5.0
+  orch._speech_active = False
+
+  orch._unlock_fresh_speech()
+
+  assert not orch._await_fresh_speech
+  assert fake_stt.reset_calls >= 1
+
+
+def test_fresh_speech_timeout_reopens_mic_without_speech() -> None:
+  cfg = _base_cfg()
+  cfg["vad"] = {"enabled": True, "gate_stt": True}
+  cfg["puppet"]["fresh_speech_timeout_ms"] = 50
+  gated_vad = GatedVad()
+  orch = _with_fake_playback(
+    Orchestrator(cfg, stt=FakeStt(), llm=FakeLlm(), tts=FakeTts(), vad=gated_vad)
+  )
+  orch._set_state(PipelineState.LISTENING)
+  orch._enter_post_reply_listen()
+  orch._echo_unlock_after = 0.0
+  orch._echo_quiet_until = time.monotonic() + 5.0
+  orch._await_fresh_since = time.monotonic() - 1.0
+  orch._speech_active = False
+  orch._speech_during_guard = False
+
+  orch._unlock_fresh_speech()
+
+  assert not orch._await_fresh_speech
 
 
 def test_interrupt_cancel_unmutes_playback_for_next_reply() -> None:

@@ -1,6 +1,6 @@
 import numpy as np
 
-from puppet.core.audio.pcm import prepend_lead_in_silence, resample_linear
+from puppet.core.audio.pcm import int16_mono_to_device, prepend_lead_in_silence, resample_linear
 from puppet.core.audio.buffer import RingBuffer
 
 
@@ -25,3 +25,19 @@ def test_prepend_lead_in_silence() -> None:
   assert out.size == 100 + 2205
   assert np.all(out[:2205] == 0.0)
   assert np.all(out[2205:] == 1.0)
+
+
+def test_int16_mono_to_respeaker_stereo_16k() -> None:
+  src = np.array([1000, -1000, 2000, -2000], dtype=np.int16).tobytes()
+  same_rate = np.frombuffer(
+    int16_mono_to_device(src, src_rate=16000, dst_rate=16000, dst_channels=2),
+    dtype=np.int16,
+  )
+  assert same_rate.tolist() == [1000, 1000, -1000, -1000, 2000, 2000, -2000, -2000]
+  down = np.frombuffer(
+    int16_mono_to_device(src, src_rate=22050, dst_rate=16000, dst_channels=2),
+    dtype=np.int16,
+  )
+  assert down.size % 2 == 0
+  assert down.size < same_rate.size
+  assert down[0] == down[1]

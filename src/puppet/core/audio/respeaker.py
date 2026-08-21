@@ -391,6 +391,12 @@ class RespeakerDoaMonitor:
     return self._debug
 
   @property
+  def firmware_speech(self) -> bool:
+    """XVF3800 VAD bit from the last DoA poll (independent of Silero)."""
+    reading = self._last_reading
+    return bool(reading is not None and reading.speech_detected)
+
+  @property
   def last_azimuth(self) -> int | None:
     """Most recent speech azimuth (survives take_utterance_azimuth)."""
     peeked = self.peek_utterance_azimuth()
@@ -430,9 +436,10 @@ class RespeakerDoaMonitor:
     """Backward-compatible alias for poll()."""
     self.poll(speech_active=speech_active)
 
-  def poll(self, *, speech_active: bool) -> DoaReading | None:
-    if not self._track or not speech_active:
+  def poll(self, *, speech_active: bool = True) -> DoaReading | None:
+    if not self._track:
       return None
+    del speech_active
     now = time.monotonic()
     if now - self._last_poll < self._poll_s:
       return self._last_reading

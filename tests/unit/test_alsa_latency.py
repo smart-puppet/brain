@@ -5,6 +5,7 @@ from puppet.core.audio.alsa_latency import (
   parse_alsa_card_modules,
   parse_hw_params,
   parse_pulse_sinks,
+  pick_respeaker_pulse_name,
   rewrite_alsa_card_args,
 )
 
@@ -95,3 +96,13 @@ def test_need_reload_when_tsched_yes() -> None:
     fragment_size=1280,
     fragments=3,
   )
+
+
+def test_pick_respeaker_pulse_name() -> None:
+  short = (
+    "1\talsa_output.platform-sound.analog-stereo\tmodule-alsa-card.c\n"
+    "7\talsa_output.usb-Seeed_Studio_reSpeaker_XVF3800_4-Mic_Array_x-00.analog-stereo"
+    "\tmodule-alsa-card.c\n"
+  )
+  assert pick_respeaker_pulse_name(short).endswith("analog-stereo")
+  assert "reSpeaker" in pick_respeaker_pulse_name(short)

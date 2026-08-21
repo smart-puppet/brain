@@ -164,7 +164,12 @@ class Orchestrator:
     self._echo_unlock_after = 0.0
     self._echo_quiet_until = 0.0
     self._await_fresh_since = 0.0
+    self._speech_during_guard = False
+    self._fresh_speech_timeout_s = (
+      max(400, int(puppet_cfg.get("fresh_speech_timeout_ms", 2500))) / 1000.0
+    )
     self._reply_in_progress = False
+    self._play_announce_active = False
     self._respeaker_cfg = audio_cfg.get("respeaker", {}) or {}
     self._pause_tts_on_speech = bool(self._respeaker_cfg.get("pause_tts_on_speech", False))
     self._respeaker_interrupt_enabled = bool(
@@ -493,6 +498,7 @@ class Orchestrator:
   def _clear_fresh_speech_gate(self) -> None:
     """Open the mic after post-reply echo guard without clipping an active utterance."""
     self._await_fresh_speech = False
+    self._speech_during_guard = False
     self.conversation.draft_user = ""
     self.stt.reset()
     self._latency.clear_speech_window()
@@ -509,6 +515,7 @@ class Orchestrator:
 
   def _enter_post_reply_listen(self) -> None:
     """Block speaker bleed from being drafted until the user speaks again."""
+    held = self._speech_during_guard or self._user_speaking_now()
     self._mark_echo_risk(duration_s=self._post_reply_echo_s)
     self._await_fresh_speech = True
     self._await_fresh_since = time.monotonic()
@@ -517,7 +524,12 @@ class Orchestrator:
     self._last_stt_at = 0.0
     self._stt_tail_until = 0.0
     self.stt.reset()
-    self._stt_pre_roll.clear()
+    if held:
+      # Keep overlapping speech (bonjour over "found you") for the next unlock.
+      self._speech_during_guard = True
+    else:
+      self._speech_during_guard = False
+      self._stt_pre_roll.clear()
     self._latency.clear_speech_window()
 
   def _speak_ready_prompt(self) -> None:
@@ -530,7 +542,11 @@ class Orchestrator:
     self._recent_tts_phrases.append(text)
     self._spoken_reply_corpus = text
     self._tts_pipeline.submit(text)
-    self._tts_pipeline.wait_done()
+    self._tts_pipeline.wait_done(timeout=12.0)
+    if self._tts_pipeline.is_busy():
+      logger.warning("Ready prompt still playing after 12s — continuing to listen")
+      self._tts_pipeline.stop()
+      self._abort_playback()
     self._reply_in_progress = False
     self._stop_tts_playback()
     self._set_state(PipelineState.LISTENING)
@@ -584,6 +600,8 @@ class Orchestrator:
       self._playback.resume()
     self.conversation.draft_user = ""
     self.stt.reset()
+    # TTS bleed is still in the mic; do not immediately pause again.
+    self._barge_in_cooldown_until = time.monotonic() + self._barge_in_cooldown_s
     logger.info("Interrupt probe classified as noise — resuming reply playback")
 
   def _cancel_reply_for_user_interrupt(self) -> None:
@@ -646,8 +664,9 @@ class Orchestrator:
       self._prepare_audio_devices()
       self._playback = AudioPlayback(
         sample_rate=self.tts.sample_rate(),
-        channels=int(audio_cfg.get("channels", 1)),
+        channels=int(audio_cfg.get("output_channels", 1)),
         device_index=audio_cfg.get("output_device"),
+        device_rate=audio_cfg.get("output_rate"),
         frames_per_buffer=int(audio_cfg.get("output_frames_per_buffer", 512)),
         write_chunk_frames=int(audio_cfg.get("output_write_chunk_frames", 256)),
         on_samples_committed=self._pump_mouth_timeline,
@@ -705,6 +724,8 @@ class Orchestrator:
     return time.monotonic() - self._playback_started_at < self._barge_in_grace_s
 
   def _barge_in_allowed(self) -> bool:
+    if self._play_announce_active:
+      return False
     if time.monotonic() < self._barge_in_cooldown_until:
       return False
     if self._barge_in_grace_active():
@@ -779,20 +800,34 @@ class Orchestrator:
     """Resume STT after post-reply echo guard once VAD sees new speech."""
     if not self._await_fresh_speech or self.state != PipelineState.LISTENING:
       return
-    if self._await_fresh_since > 0 and time.monotonic() - self._await_fresh_since > 15.0:
-      logger.warning("Fresh-speech wait timed out — resuming capture")
-      self._await_fresh_speech = False
+    if self._tts_playback_active:
       return
-    if time.monotonic() < self._echo_unlock_after:
+    now = time.monotonic()
+    if now < self._echo_unlock_after:
       return
-    if self._tts_playback_active or time.monotonic() < self._echo_quiet_until:
-      return
+    timed_out = (
+      self._await_fresh_since > 0
+      and now - self._await_fresh_since > self._fresh_speech_timeout_s
+    )
+    speaking = self._user_speaking_now()
+    heard = self._speech_during_guard or speaking
     if not self._vad_enabled:
+      if not heard and now < self._echo_quiet_until and not timed_out:
+        return
       self._clear_fresh_speech_gate()
+      if speaking:
+        self._flush_stt_pre_roll()
       return
-    if self._user_speaking_now():
+    if heard:
       self._clear_fresh_speech_gate()
+      if speaking:
+        self._flush_stt_pre_roll()
       logger.info("Listening again — speak your request")
+      return
+    if not timed_out:
+      return
+    self._clear_fresh_speech_gate()
+    logger.warning("Fresh-speech wait timed out — resuming capture")
 
   def _handle_vad_events(self, mic: np.ndarray) -> bool:
     events = self._vad.feed(mic)
@@ -800,6 +835,12 @@ class Orchestrator:
       if event.kind == "start":
         self._speech_active = True
         self._respeaker_doa.clear_utterance()
+        if (
+          self._await_fresh_speech
+          or self._tts_playback_active
+          or self._reply_still_active()
+        ):
+          self._speech_during_guard = True
         if self.state == PipelineState.LISTENING:
           if self._await_fresh_speech:
             if self._tts_playback_active or time.monotonic() < self._echo_unlock_after:
@@ -836,7 +877,9 @@ class Orchestrator:
       return True
     if self._stt_tail_until and time.monotonic() < self._stt_tail_until:
       return True
-    return self._speech_active or self._vad.is_speech
+    if self._speech_active or self._vad.is_speech:
+      return True
+    return self._respeaker_doa.firmware_speech
 
   def _maybe_confirm_user_interrupt(self, text: str) -> bool:
     """True if STT during a reply is the child, not Piper echoing into the mic."""
@@ -908,7 +951,9 @@ class Orchestrator:
       self.stt.reset()
       return False
     if self._user_speaking():
-      return False
+      quiet_s = max(self._stt_gap_s, self._stt_tail_s, 0.8)
+      if self._last_stt_at <= 0 or time.monotonic() - self._last_stt_at < quiet_s:
+        return False
     return True
 
   def _on_stt_eou(self) -> None:
@@ -961,6 +1006,8 @@ class Orchestrator:
       return
     if time.monotonic() - self._last_stt_at < self._stt_gap_s:
       return
+    if self._user_speaking():
+      logger.info("STT quiet while VAD still open — starting reply")
     self._start_generation()
 
   def _suspend_stt_for_llm(self) -> None:
@@ -1107,6 +1154,13 @@ class Orchestrator:
     else:
       logger.warning("Vision refresh failed: %s", result.get("error"))
 
+  def _play_announce_should_abort(self, reason: str) -> bool:
+    if self._play is None:
+      return False
+    if reason == "seek":
+      return self._play.mode != "seek"
+    return False
+
   def _announce_play_event(self, reason: str) -> None:
     """Speak a canned line for play start/stop/found (Piper; no LLM)."""
     if reason not in ("found", "giveup", "seek", "nofollow"):
@@ -1117,20 +1171,35 @@ class Orchestrator:
     if not text:
       return
     logger.info("Play announce %s: %s", reason, text)
+    self._play_announce_active = True
     self._reply_in_progress = True
     self._recent_tts_phrases.append(text)
     self._spoken_reply_corpus = text
     self._set_state(PipelineState.SPEAKING)
+    aborted = False
     try:
       self._tts_pipeline.submit(text)
-      self._tts_pipeline.wait_done()
+      while self._tts_pipeline.is_busy():
+        if self._play_announce_should_abort(reason):
+          logger.info(
+            "Play announce %s aborted (mode=%s)",
+            reason,
+            getattr(self._play, "mode", "?"),
+          )
+          self._tts_pipeline.stop()
+          self._stop_tts_playback()
+          aborted = True
+          break
+        self._tts_pipeline.wait_done(timeout=0.2)
     except Exception:
       logger.exception("Play announce TTS failed")
-    if text:
+    finally:
+      self._play_announce_active = False
+      self._reply_in_progress = False
+    if text and not aborted:
       self.conversation.add_assistant(text)
       self.bus.emit("assistant_reply", text=text)
       logger.info("Assistant: %s", text)
-    self._reply_in_progress = False
     self._stop_tts_playback()
     self._set_state(PipelineState.LISTENING)
     self._end_stt_turn()
@@ -1688,7 +1757,7 @@ class Orchestrator:
   def _handle_audio_chunk(self, mic: np.ndarray, sample_rate: int) -> None:
     self._last_mic_rms = rms_energy(mic)
     self._handle_vad_events(mic)
-    self._respeaker_doa.poll(speech_active=self._user_speaking_now())
+    self._respeaker_doa.poll()
     self._unlock_fresh_speech()
     if (
       self._respeaker_interrupt_enabled

@@ -88,6 +88,62 @@ def parse_sample_spec(text: str) -> tuple[str, int, int] | None:
   return match.group("fmt").lower(), int(match.group("ch")), int(match.group("hz"))
 
 
+_RESPEAKER_MARKERS = ("respeaker", "xvf3800", "seeed")
+
+
+def pulse_name_is_respeaker(name: str) -> bool:
+  lowered = (name or "").lower()
+  if ".monitor" in lowered:
+    return False
+  return any(marker in lowered for marker in _RESPEAKER_MARKERS)
+
+
+def pick_respeaker_pulse_name(short_list: str) -> str | None:
+  """Prefer analog ReSpeaker from `pactl list {sinks,sources} short`."""
+  analog = None
+  other = None
+  for line in short_list.splitlines():
+    parts = line.split("\t")
+    if len(parts) < 2:
+      continue
+    name = parts[1].strip()
+    if not pulse_name_is_respeaker(name):
+      continue
+    if "analog" in name.lower():
+      analog = name
+    else:
+      other = other or name
+  return analog or other
+
+
+def pin_respeaker_pulse_defaults() -> str | None:
+  """Force Pulse default sink/source onto the XVF3800 so hardware AEC sees TTS."""
+  try:
+    sinks = _pactl("list", "sinks", "short")
+    sources = _pactl("list", "sources", "short")
+    default_sink = _pactl("get-default-sink").strip()
+    default_source = _pactl("get-default-source").strip()
+  except (FileNotFoundError, RuntimeError, subprocess.TimeoutExpired) as exc:
+    logger.info("Pulse ReSpeaker pin skipped (%s)", exc)
+    return None
+  sink = pick_respeaker_pulse_name(sinks)
+  source = pick_respeaker_pulse_name(sources)
+  if sink and sink != default_sink:
+    try:
+      _pactl("set-default-sink", sink)
+      logger.info("Pulse default sink → %s (XVF3800 AEC far-end)", sink)
+      default_sink = sink
+    except (RuntimeError, subprocess.TimeoutExpired) as exc:
+      logger.warning("Could not set Pulse default sink to ReSpeaker: %s", exc)
+  if source and source != default_source:
+    try:
+      _pactl("set-default-source", source)
+      logger.info("Pulse default source → %s", source)
+    except (RuntimeError, subprocess.TimeoutExpired) as exc:
+      logger.warning("Could not set Pulse default source to ReSpeaker: %s", exc)
+  return sink or default_sink
+
+
 def fragment_bytes(*, rate: int, channels: int, sample_format: str, period_ms: int) -> int:
   width = _BYTES_PER_SAMPLE.get(sample_format.lower(), 2)
   frames = max(1, int(rate * period_ms / 1000))
@@ -226,6 +282,7 @@ def configure_low_latency_alsa_output(audio_cfg: dict[str, Any] | None = None) -
   cfg = audio_cfg or {}
   period_ms = max(5, int(cfg.get("output_alsa_period_ms", 20)))
   periods = max(2, int(cfg.get("output_alsa_periods", 3)))
+  pin_respeaker_pulse_defaults()
   try:
     default_sink = _pactl("get-default-sink").strip()
     sinks = parse_pulse_sinks(_pactl("list", "sinks"))

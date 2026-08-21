@@ -16,6 +16,7 @@ puppet:
   # --- Echo / bleed guard (post-reply) ---
   echo_quiet_ms: 2000
   post_reply_echo_ms: 1200
+  fresh_speech_timeout_ms: 2500  # reopen mic if greeting overlapped TTS
   tts_echo_word_overlap: 0.45
   tts_echo_trigram_overlap: 0.35
 
@@ -23,7 +24,7 @@ puppet:
   barge_in_clean_ms: 400
   barge_in_clean_rms: 0.015
   barge_in_cooldown_ms: 2500
-  barge_in_grace_ms: 600
+  barge_in_grace_ms: 1500
 
   # --- Jaw servo (PCA9685 + MF90) ---
   mouth:
